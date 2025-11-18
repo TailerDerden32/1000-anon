@@ -13,7 +13,6 @@ import time
 BOT_TOKEN = os.environ['BOT_TOKEN']
 ADMIN_IDS = [int(x.strip()) for x in os.environ['ADMIN_IDS'].split(',')]
 CHANNEL_USERNAME = os.environ['CHANNEL_USERNAME']
-# =================
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,6 +20,15 @@ logger = logging.getLogger(__name__)
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
+
+# Проверка канала
+try:
+    chat = bot.get_chat(CHANNEL_USERNAME)
+    logger.info(f"✅ Канал найден: {chat.title}")
+except Exception as e:
+    logger.error(f"❌ Ошибка доступа к каналу {CHANNEL_USERNAME}: {e}")
+    logger.error("⚠️ Проверьте: 1) Юзернейм канала 2) Бот добавлен как администратор")
+# =================
 
 # === УДАЛЕНИЕ WEBHOOK ПЕРЕД ЗАПУСКОМ ===
 def delete_webhook():
@@ -203,6 +211,28 @@ def stats_command(message):
     except Exception as e:
         logger.error(f"❌ Ошибка статистики: {e}")
         bot.send_message(message.chat.id, "❌ Ошибка при получении статистики")
+
+@bot.message_handler(commands=['info'])
+def info_command(message):
+    """Команда для проверки настроек (только для админов)"""
+    if message.from_user.id not in ADMIN_IDS:
+        return
+        
+    try:
+        chat = bot.get_chat(CHANNEL_USERNAME)
+        channel_info = f"✅ {chat.title} ({CHANNEL_USERNAME})"
+    except Exception as e:
+        channel_info = f"❌ {CHANNEL_USERNAME} - ошибка: {e}"
+    
+    info_text = f"""
+⚙️ <b>Информация о настройках:</b>
+
+🤖 Бот: {'✅ Запущен' if BOT_TOKEN else '❌ Не настроен'}
+👥 Админов: {len(ADMIN_IDS)}
+📢 Канал: {channel_info}
+🆔 Ваш ID: {message.from_user.id}
+"""
+    bot.send_message(message.chat.id, info_text, parse_mode='HTML')
 
 # === ОБРАБОТЧИКИ СООБЩЕНИЙ ===
 @bot.message_handler(content_types=['text'])
@@ -464,3 +494,4 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
