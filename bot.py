@@ -1,445 +1,419 @@
 import os
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import sqlite3
 from datetime import datetime
+import logging
+import requests
+import json
+from flask import Flask, request
+import threading
+import time
 
-# === НАСТРОЙКИ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ===
+# === НАСТРОЙКИ ===
 BOT_TOKEN = os.environ['BOT_TOKEN']
-ADMIN_ID = int(os.environ['ADMIN_ID'])
+ADMIN_IDS = [int(x.strip()) for x in os.environ['ADMIN_IDS'].split(',')]
 CHANNEL_USERNAME = os.environ['CHANNEL_USERNAME']
-# =========================================
+# =================
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
 
-# База данных
+# === УДАЛЕНИЕ WEBHOOK ПЕРЕД ЗАПУСКОМ ===
+def delete_webhook():
+    """Удаляет webhook перед запуском polling"""
+    try:
+        logger.info("🔄 Удаление webhook...")
+        bot.remove_webhook()
+        time.sleep(1)
+        logger.info("✅ Webhook удален")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления webhook: {e}")
+        return False
+
+# === АВТО-ПИНГ ДЛЯ АКТИВНОСТИ REPL ===
+def auto_ping():
+    """Автоматически поддерживает Repl активным"""
+    time.sleep(15)
+    logger.info("🔄 Запуск авто-пинга...")
+
+    while True:
+        try:
+            # Основной URL для пинга (с портом 8080)
+            repl_url = "https://c1c7c588-6699-4532-a5b7-ffafbb816933-00-1b5e6vfqk8lfh.sisko.replit.dev:8080"
+            response = requests.get(repl_url, timeout=10)
+            logger.info(f"✅ Авто-пинг успешен: {response.status_code}")
+
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"⚠️ Авто-пинг ошибка: {e}")
+
+        except Exception as e:
+            logger.error(f"❌ Неожиданная ошибка авто-пинга: {e}")
+
+        time.sleep(240)
+
+# === ЗАПУСК FLASK В ФОНЕ ===
+def run_flask():
+    """Запускает Flask сервер в фоновом режиме"""
+    time.sleep(5)  # Даем время запуститься polling
+    logger.info("🌐 Запуск Flask сервера в фоне...")
+    app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
+
+# === БАЗА ДАННЫХ ===
 def init_db():
-    conn = sqlite3.connect('bot.db')
+    conn = sqlite3.connect('bot.db', check_same_thread=False)
     cursor = conn.cursor()
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             user_name TEXT,
+            username TEXT,
             message_text TEXT,
+            message_type TEXT,
+            file_id TEXT,
+            file_type TEXT,
             timestamp TEXT,
-            status TEXT DEFAULT 'pending',
-            channel_message_id INTEGER,
-            admin_message_id INTEGER
+            status TEXT DEFAULT 'pending'
         )
     ''')
-    
-    # Проверяем существование колонки admin_message_id и добавляем если нет
-    cursor.execute("PRAGMA table_info(messages)")
-    columns = [column[1] for column in cursor.fetchall()]
-    
-    if 'admin_message_id' not in columns:
-        cursor.execute('ALTER TABLE messages ADD COLUMN admin_message_id INTEGER')
-        print("✅ Добавлена колонка admin_message_id в базу данных")
-    
+
     conn.commit()
     conn.close()
+    logger.info("✅ База данных инициализирована")
 
 init_db()
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    user = message.from_user
-    print(f"👤 Новый пользователь: {user.first_name}")
-    
-    if user.id == ADMIN_ID:
-        bot.send_message(
-            message.chat.id, 
-            "👑 Привет, администратор!\n"
-            "Используй:\n"
-            "/stats - статистика\n"
-            "/pending - ожидающие сообщения\n"
-            "/moderate - режим модерации"
-        )
-    else:
-        bot.send_message(
-            message.chat.id,
-            f"👋 Привет, {user.first_name}!\n\n"
-            "📝 Отправляй сообщения - они будут анонимными."
-        )
-
-@bot.message_handler(commands=['stats'])
-def stats(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT COUNT(*) FROM messages")
-    total_messages = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE status = 'pending'")
-    pending_messages = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE status = 'approved'")
-    approved_messages = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE status = 'rejected'")
-    rejected_messages = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(DISTINCT user_id) FROM messages")
-    unique_users = cursor.fetchone()[0]
-    
-    conn.close()
-    
-    stats_text = (
-        f"📊 Статистика бота:\n\n"
-        f"📨 Всего сообщений: {total_messages}\n"
-        f"👥 Уникальных пользователей: {unique_users}\n"
-        f"⏳ Ожидают: {pending_messages}\n"
-        f"✅ Одобрено: {approved_messages}\n"
-        f"❌ Отклонено: {rejected_messages}\n"
-        f"🕒 Обновлено: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-    )
-    
-    bot.send_message(message.chat.id, stats_text)
-
-@bot.message_handler(commands=['pending'])
-def pending_messages(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT id, user_name, message_text, timestamp 
-        FROM messages 
-        WHERE status = 'pending' 
-        ORDER BY timestamp DESC 
-        LIMIT 10
-    ''')
-    messages = cursor.fetchall()
-    conn.close()
-    
-    if not messages:
-        bot.send_message(message.chat.id, "📭 Нет сообщений")
-        return
-    
-    for msg_id, user_name, msg_text, timestamp in messages:
-        time = datetime.fromisoformat(timestamp).strftime('%d.%m.%Y %H:%M')
-        
-        admin_message = (
-            f"⏳ Сообщение\n\n"
-            f"💬 Текст: {msg_text}\n\n"
-            f"👤 Отправитель: {user_name}\n"
-            f"📅 Время: {time}\n"
-            f"🆔 ID: {msg_id}"
-        )
-        
-        keyboard = InlineKeyboardMarkup()
-        keyboard.row(
-            InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{msg_id}"),
-            InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{msg_id}")
-        )
-        
-        try:
-            sent_msg = bot.send_message(ADMIN_ID, admin_message, reply_markup=keyboard)
-            
-            conn = sqlite3.connect('bot.db')
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE messages SET admin_message_id = ? WHERE id = ?",
-                (sent_msg.message_id, msg_id)
-            )
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"❌ Ошибка отправки сообщения админу: {e}")
-
-@bot.message_handler(commands=['moderate'])
-def moderate_mode(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT id, user_name, message_text, timestamp 
-        FROM messages 
-        WHERE status = 'pending' 
-        ORDER BY timestamp ASC 
-        LIMIT 1
-    ''')
-    message_data = cursor.fetchone()
-    conn.close()
-    
-    if not message_data:
-        bot.send_message(message.chat.id, "📭 Нет сообщений")
-        return
-    
-    msg_id, user_name, msg_text, timestamp = message_data
-    time = datetime.fromisoformat(timestamp).strftime('%d.%m.%Y %H:%M')
-    
-    admin_message = (
-        f"⏳ Сообщение\n\n"
-        f"💬 Текст: {msg_text}\n\n"
-        f"👤 Отправитель: {user_name}\n"
-        f"📅 Время: {time}\n"
-        f"🆔 ID: {msg_id}"
-    )
-    
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{msg_id}"),
-        InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{msg_id}")
-    )
-    keyboard.add(InlineKeyboardButton("⏭️ Следующее", callback_data="next_pending"))
-    
-    try:
-        sent_msg = bot.send_message(ADMIN_ID, admin_message, reply_markup=keyboard)
-        
-        conn = sqlite3.connect('bot.db')
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE messages SET admin_message_id = ? WHERE id = ?",
-            (sent_msg.message_id, msg_id)
-        )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"❌ Ошибка отправки сообщения админу: {e}")
-
-@bot.message_handler(content_types=['text'])
-def handle_message(message):
-    user = message.from_user
-    text = message.text.strip()
-    
-    if text.startswith('/'):
-        return
-    
-    print(f"📨 Сообщение от {user.first_name}: {text}")
-    
-    conn = sqlite3.connect('bot.db')
+def save_message_to_db(user_id, user_name, username, message_type, text, file_id=None, file_type=None):
+    conn = sqlite3.connect('bot.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO messages (user_id, user_name, message_text, timestamp, status) VALUES (?, ?, ?, ?, 'pending')",
-        (user.id, f"{user.first_name} (@{user.username})", text, datetime.now().isoformat())
+        "INSERT INTO messages (user_id, user_name, username, message_text, message_type, file_id, file_type, timestamp, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
+        (user_id, user_name, username, text, message_type, file_id, file_type, datetime.now().isoformat())
     )
     message_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    
-    bot.send_message(message.chat.id, "✅")
-    
-    notify_admin_about_new_message(message_id, user, text)
+    return message_id
 
-def notify_admin_about_new_message(message_id, user, text):
-    """Уведомляет админа о новом сообщении"""
-    admin_message = (
-        f"🆕 Новое сообщение\n\n"
-        f"💬 Текст: {text}\n\n"
-        f"👤 Отправитель:\n"
-        f"   Имя: {user.first_name}\n"
-        f"   Фамилия: {user.last_name or 'Не указана'}\n"
-        f"   Username: @{user.username or 'Не указан'}\n"
-        f"   ID: {user.id}\n\n"
-        f"📅 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
-        f"🆔 ID: {message_id}"
-    )
-    
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{message_id}"),
-        InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{message_id}")
-    )
-    
+def get_message_from_db(message_id):
+    conn = sqlite3.connect('bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM messages WHERE id = ?", (message_id,))
+    message = cursor.fetchone()
+    conn.close()
+    return message
+
+# === ОТПРАВКА СООБЩЕНИЙ ===
+def send_to_channel(message_data):
     try:
-        sent_msg = bot.send_message(ADMIN_ID, admin_message, reply_markup=keyboard)
-        
-        conn = sqlite3.connect('bot.db')
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE messages SET admin_message_id = ? WHERE id = ?",
-            (sent_msg.message_id, message_id)
-        )
-        conn.commit()
-        conn.close()
-        
-        print(f"✅ Уведомление отправлено админу о сообщении #{message_id}")
-    except Exception as e:
-        print(f"❌ Ошибка отправки админу: {e}")
+        message_type = message_data.get('message_type')
+        text = message_data.get('text', '')
+        file_id = message_data.get('file_id')
 
-# Обработка callback-запросов (кнопок)
+        if message_type == 'text':
+            bot.send_message(CHANNEL_USERNAME, text, parse_mode='HTML')
+            return True
+        elif message_type == 'photo':
+            bot.send_photo(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+            return True
+        elif message_type == 'video':
+            bot.send_video(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+            return True
+        elif message_type == 'voice':
+            bot.send_voice(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+            return True
+        elif message_type == 'document':
+            bot.send_document(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+            return True
+        else:
+            logger.error(f"❌ Неподдерживаемый тип: {message_type}")
+            return False
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки в канал: {e}")
+        return False
+
+# === ОБРАБОТЧИКИ КОМАНД ===
+@bot.message_handler(commands=['start'])
+def start(message):
+    user = message.from_user
+    logger.info(f"👤 /start от {user.first_name} (ID: {user.id})")
+    bot.send_message(message.chat.id, 
+                    "👋 <b>Привет!</b>\n\n"
+                    "Отправь мне сообщение или медиафайл для публикации в канале.\n"
+                    "Всё будет отправлено, наверное.", 
+                    parse_mode='HTML')
+
+@bot.message_handler(commands=['help'])
+def help_command(message):
+    help_text = """
+🤖 <b>Доступные команды:</b>
+/start - Начать работу
+/help - Показать справку
+
+📨 <b>Что можно отправить:</b>
+• Текстовые сообщения
+• Фотографии (с подписью или без)
+• Видео (с подписью или без) 
+• Голосовые сообщения
+• Документы
+• Аудиофайлы
+
+📋 <b>Процесс:</b>
+1. Вы отправляете контент
+2. Администраторы смотрят его
+3. После просмотра - публикация в канале
+"""
+    bot.send_message(message.chat.id, help_text, parse_mode='HTML')
+
+@bot.message_handler(commands=['stats'])
+def stats_command(message):
+    if message.from_user.id not in ADMIN_IDS:
+        bot.send_message(message.chat.id, "❌ Нет прав для просмотра статистики")
+        return
+
+    try:
+        conn = sqlite3.connect('bot.db', check_same_thread=False)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM messages")
+        total = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM messages")
+        users = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM messages WHERE status = 'approved'")
+        approved = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM messages WHERE status = 'rejected'")
+        rejected = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM messages WHERE status = 'pending'")
+        pending = cursor.fetchone()[0]
+
+        stats = f"""📊 <b>Статистика бота</b>
+
+📨 Всего сообщений: <b>{total}</b>
+👥 Уникальных пользователей: <b>{users}</b>
+✅ Одобрено: <b>{approved}</b>
+❌ Отклонено: <b>{rejected}</b>
+⏳ Ожидают модерации: <b>{pending}</b>"""
+
+        bot.send_message(message.chat.id, stats, parse_mode='HTML')
+        conn.close()
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка статистики: {e}")
+        bot.send_message(message.chat.id, "❌ Ошибка при получении статистики")
+
+# === ОБРАБОТЧИКИ СООБЩЕНИЙ ===
+@bot.message_handler(content_types=['text'])
+def handle_text(message):
+    if message.text.startswith('/'):
+        return
+
+    user = message.from_user
+    logger.info(f"📝 Текст от {user.first_name} (ID: {user.id})")
+
+    message_id = save_message_to_db(
+        user.id,
+        user.first_name or 'User',
+        user.username or '',
+        'text',
+        message.text
+    )
+
+    bot.send_message(message.chat.id, "✅ Сообщение отправлено")
+    notify_admins(message_id, user, message.text, 'text')
+
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    user = message.from_user
+    caption = message.caption or '📷 Фото'
+    file_id = message.photo[-1].file_id
+
+    message_id = save_message_to_db(
+        user.id,
+        user.first_name or 'User',
+        user.username or '',
+        'photo',
+        caption,
+        file_id,
+        'photo'
+    )
+
+    bot.send_message(message.chat.id, "✅ Фото отправлено")
+    notify_admins(message_id, user, caption, 'photo')
+
+@bot.message_handler(content_types=['video'])
+def handle_video(message):
+    user = message.from_user
+    caption = message.caption or '🎥 Видео'
+    file_id = message.video.file_id
+
+    message_id = save_message_to_db(
+        user.id,
+        user.first_name or 'User',
+        user.username or '',
+        'video',
+        caption,
+        file_id,
+        'video'
+    )
+
+    bot.send_message(message.chat.id, "✅ Видео отправлено")
+    notify_admins(message_id, user, caption, 'video')
+
+@bot.message_handler(content_types=['voice'])
+def handle_voice(message):
+    user = message.from_user
+    file_id = message.voice.file_id
+
+    message_id = save_message_to_db(
+        user.id,
+        user.first_name or 'User',
+        user.username or '',
+        'voice',
+        '🎤 Голосовое сообщение',
+        file_id,
+        'voice'
+    )
+
+    bot.send_message(message.chat.id, "✅ Голосовое сообщение отправлено")
+    notify_admins(message_id, user, '🎤 Голосовое сообщение', 'voice')
+
+@bot.message_handler(content_types=['document'])
+def handle_document(message):
+    user = message.from_user
+    caption = message.caption or '📄 Документ'
+    file_id = message.document.file_id
+
+    message_id = save_message_to_db(
+        user.id,
+        user.first_name or 'User',
+        user.username or '',
+        'document',
+        caption,
+        file_id,
+        'document'
+    )
+
+    bot.send_message(message.chat.id, "✅ Документ отправлен")
+    notify_admins(message_id, user, caption, 'document')
+
+# === УВЕДОМЛЕНИЯ АДМИНАМ ===
+def notify_admins(message_id, user, text, media_type):
+    icons = {'text': '📝', 'photo': '📷', 'video': '🎥', 'voice': '🎤', 'document': '📄'}
+    icon = icons.get(media_type, '📨')
+    username_display = f"@{user.username}" if user.username else "нет юзернейма"
+
+    admin_msg = f"""{icon} <b>Новое сообщение</b> #{message_id}
+
+👤 <b>От:</b> {user.first_name} ({username_display})
+🆔 <b>ID:</b> {user.id}
+📋 <b>Тип:</b> {media_type}
+📝 <b>Текст:</b> {text if text else 'Нет текста'}"""
+
+    from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    for admin_id in ADMIN_IDS:
+        try:
+            keyboard = InlineKeyboardMarkup()
+            keyboard.row(
+                InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{message_id}"),
+                InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{message_id}")
+            )
+            bot.send_message(admin_id, admin_msg, reply_markup=keyboard, parse_mode='HTML')
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки админу {admin_id}: {e}")
+
+# === ОБРАБОТКА CALLBACK ===
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
-    user_id = call.from_user.id
-    
-    if user_id != ADMIN_ID:
-        bot.answer_callback_query(call.id, "❌ У вас нет прав")
-        return
-    
-    data = call.data
-    
-    if data.startswith('approve_'):
-        message_id = int(data.split('_')[1])
-        approve_message(call, message_id)
-        
-    elif data.startswith('reject_'):
-        message_id = int(data.split('_')[1])
-        reject_message(call, message_id)
-        
-    elif data == 'next_pending':
-        show_next_pending(call)
-    
-    bot.answer_callback_query(call.id)
+    logger.info(f"🔄 Callback: {call.data} от {call.from_user.id}")
 
-def approve_message(call, message_id):
-    """Одобряет сообщение и отправляет в канал"""
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT message_text, admin_message_id FROM messages WHERE id = ?', (message_id,))
-    message_data = cursor.fetchone()
-    
-    if not message_data:
+    if call.from_user.id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ Нет прав для модерации")
         return
-    
-    message_text, admin_message_id = message_data
-    
+
     try:
-        channel_message = (
-            f"💬 Анонимное сообщение:\n\n"
-            f"{message_text}\n\n"
-            f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-        )
-        
-        sent_message = bot.send_message(CHANNEL_USERNAME, channel_message)
-        
-        cursor.execute(
-            "UPDATE messages SET status = 'approved', channel_message_id = ? WHERE id = ?",
-            (sent_message.message_id, message_id)
-        )
-        conn.commit()
-        
-        if admin_message_id:
-            try:
-                cursor.execute('SELECT user_name, message_text, timestamp FROM messages WHERE id = ?', (message_id,))
-                original_data = cursor.fetchone()
-                if original_data:
-                    user_name, msg_text, timestamp = original_data
-                    time = datetime.fromisoformat(timestamp).strftime('%d.%m.%Y %H:%M')
-                    
-                    updated_message = (
-                        f"✅ ОДОБРЕНО\n\n"
-                        f"💬 Текст: {msg_text}\n\n"
-                        f"👤 Отправитель: {user_name}\n"
-                        f"📅 Время: {time}\n"
-                        f"🆔 ID: {message_id}\n\n"
-                        f"📢 Опубликовано: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-                    )
-                    
-                    bot.edit_message_text(
-                        updated_message,
-                        ADMIN_ID,
-                        admin_message_id
-                    )
-            except Exception as e:
-                print(f"⚠️ Не удалось обновить сообщение: {e}")
-        
-        print(f"✅ Сообщение #{message_id} одобрено и отправлено в канал")
-        
+        if call.data.startswith('approve_'):
+            message_id = int(call.data.split('_')[1])
+            message_data = get_message_from_db(message_id)
+
+            if message_data:
+                success = send_to_channel({
+                    'message_type': message_data[5],  # message_type
+                    'text': message_data[4],         # message_text
+                    'file_id': message_data[6]       # file_id
+                })
+
+                conn = sqlite3.connect('bot.db', check_same_thread=False)
+                cursor = conn.cursor()
+                if success:
+                    cursor.execute("UPDATE messages SET status = 'approved' WHERE id = ?", (message_id,))
+                    status_text = f"✅ Сообщение #{message_id} одобрено и опубликовано"
+                    logger.info(f"✅ Сообщение #{message_id} опубликовано")
+                else:
+                    cursor.execute("UPDATE messages SET status = 'error' WHERE id = ?", (message_id,))
+                    status_text = f"❌ Сообщение #{message_id} не удалось опубликовать"
+                conn.commit()
+                conn.close()
+
+                bot.edit_message_text(status_text, call.message.chat.id, call.message.message_id)
+            else:
+                bot.edit_message_text(f"❌ Сообщение #{message_id} не найдено", call.message.chat.id, call.message.message_id)
+
+        elif call.data.startswith('reject_'):
+            message_id = int(call.data.split('_')[1])
+            conn = sqlite3.connect('bot.db', check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE messages SET status = 'rejected' WHERE id = ?", (message_id,))
+            conn.commit()
+            conn.close()
+
+            bot.edit_message_text(f"❌ Сообщение #{message_id} отклонено", call.message.chat.id, call.message.message_id)
+            logger.info(f"❌ Сообщение #{message_id} отклонено")
+
+        bot.answer_callback_query(call.id, "✅ Действие выполнено")
+
     except Exception as e:
-        print(f"❌ Ошибка отправки в канал: {e}")
-    
-    finally:
-        conn.close()
+        logger.error(f"❌ Ошибка callback: {e}")
+        bot.answer_callback_query(call.id, "❌ Ошибка обработки")
 
-def reject_message(call, message_id):
-    """Отклоняет сообщение"""
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT admin_message_id FROM messages WHERE id = ?', (message_id,))
-    result = cursor.fetchone()
-    admin_message_id = result[0] if result else None
-    
-    cursor.execute(
-        "UPDATE messages SET status = 'rejected' WHERE id = ?",
-        (message_id,)
-    )
-    conn.commit()
-    
-    if admin_message_id:
-        try:
-            cursor.execute('SELECT user_name, message_text, timestamp FROM messages WHERE id = ?', (message_id,))
-            original_data = cursor.fetchone()
-            if original_data:
-                user_name, msg_text, timestamp = original_data
-                time = datetime.fromisoformat(timestamp).strftime('%d.%m.%Y %H:%M')
-                
-                updated_message = (
-                    f"❌ ОТКЛОНЕНО\n\n"
-                    f"💬 Текст: {msg_text}\n\n"
-                    f"👤 Отправитель: {user_name}\n"
-                    f"📅 Время: {time}\n"
-                    f"🆔 ID: {message_id}\n\n"
-                    f"⏰ Отклонено: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-                )
-                
-                bot.edit_message_text(
-                    updated_message,
-                    ADMIN_ID,
-                    admin_message_id
-                )
-        except Exception as e:
-            print(f"⚠️ Не удалось обновить сообщение: {e}")
-    
-    conn.close()
-    print(f"❌ Сообщение #{message_id} отклонено")
-
-def show_next_pending(call):
-    """Показывает следующее сообщение"""
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT id, user_name, message_text, timestamp 
-        FROM messages 
-        WHERE status = 'pending' 
-        ORDER BY timestamp ASC 
-        LIMIT 1
-    ''')
-    message_data = cursor.fetchone()
-    conn.close()
-    
-    if not message_data:
-        bot.edit_message_text(
-            "📭 Нет сообщений",
-            call.message.chat.id,
-            call.message.message_id
-        )
-        return
-    
-    msg_id, user_name, msg_text, timestamp = message_data
-    time = datetime.fromisoformat(timestamp).strftime('%d.%m.%Y %H:%M')
-    
-    admin_message = (
-        f"⏳ Сообщение\n\n"
-        f"💬 Текст: {msg_text}\n\n"
-        f"👤 Отправитель: {user_name}\n"
-        f"📅 Время: {time}\n"
-        f"🆔 ID: {msg_id}"
-    )
-    
-    keyboard = InlineKeyboardMarkup()
-    keyboard.row(
-        InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{msg_id}"),
-        InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{msg_id}")
-    )
-    keyboard.add(InlineKeyboardButton("⏭️ Следующее", callback_data="next_pending"))
-    
-    bot.edit_message_text(
-        admin_message,
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=keyboard
-    )
+# === WEBHOOK И FLASK ===
+@app.route('/')
+def home():
+    return "🤖 Бот работает! Статус: ONLINE"
 
 if __name__ == "__main__":
-    print("🚀 Бот запущен на сервере!")
-    bot.infinity_polling()
+    logger.info("🚀 Запуск бота...")
+
+    # УДАЛЯЕМ WEBHOOK ПЕРЕД ЗАПУСКОМ
+    delete_webhook()
+
+    # Запускаем авто-пинг в фоне
+    ping_thread = threading.Thread(target=auto_ping, daemon=True)
+    ping_thread.start()
+
+    # Запускаем Flask в фоне
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    # Запускаем polling в ОСНОВНОМ потоке
+    logger.info("🤖 Запуск polling...")
+    try:
+        bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+    except Exception as e:
+        logger.error(f"❌ Ошибка polling: {e}")
+        logger.info("🔄 Перезапуск polling через 10 секунд...")
+        time.sleep(10)
+        # Удаляем webhook еще раз и перезапускаем
+        delete_webhook()
+        bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
