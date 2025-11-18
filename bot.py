@@ -10,9 +10,20 @@ import threading
 import time
 
 # === НАСТРОЙКИ ===
-BOT_TOKEN = os.environ['BOT_TOKEN']
-ADMIN_IDS = [int(x.strip()) for x in os.environ['ADMIN_IDS'].split(',')]
-CHANNEL_USERNAME = os.environ['CHANNEL_USERNAME']
+# Получаем настройки из переменных окружения
+BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+ADMIN_IDS = [int(x.strip()) for x in os.environ.get('ADMIN_IDS', '123456789,987654321').split(',')]
+CHANNEL_USERNAME = os.environ.get('CHANNEL_USERNAME', '@your_channel_username')
+
+# Если переменные окружения не установлены, используем значения ниже
+if BOT_TOKEN == 'YOUR_BOT_TOKEN_HERE':
+    # ⚠️ ЗАМЕНИТЕ ЭТИ ЗНАЧЕНИЯ НА СВОИ ⚠️
+    BOT_TOKEN = "1234567890:AAFgLdGfV6r4rS3cT2vQ1wXyZ8bN9mKjHlL"  # Токен бота от @BotFather
+    ADMIN_IDS = [123456789, 987654321]  # ID администраторов через запятую
+    CHANNEL_USERNAME = "@your_channel"  # Юзернейм канала (с @)
+
+# Вывод информации о настройках (только в логи)
+logger = logging.getLogger(__name__)
 # =================
 
 # Настройка логирования
@@ -25,6 +36,11 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Логируем информацию о настройках (без чувствительных данных)
+logger.info(f"🤖 Бот запускается...")
+logger.info(f"👥 Админов: {len(ADMIN_IDS)}")
+logger.info(f"📢 Канал: {CHANNEL_USERNAME}")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -196,6 +212,22 @@ def stats_command(message):
 
     except Exception as e:
         logger.error(f"❌ Ошибка статистики: {e}")
+
+@bot.message_handler(commands=['info'])
+def info_command(message):
+    """Команда для проверки настроек (только для админов)"""
+    if message.from_user.id not in ADMIN_IDS:
+        return
+        
+    info_text = f"""
+⚙️ <b>Информация о настройках:</b>
+
+🤖 Бот: {'✅ Запущен' if BOT_TOKEN != 'YOUR_BOT_TOKEN_HERE' else '❌ Не настроен'}
+👥 Админов: {len(ADMIN_IDS)}
+📢 Канал: {CHANNEL_USERNAME}
+🆔 Ваш ID: {message.from_user.id}
+"""
+    bot.send_message(message.chat.id, info_text, parse_mode='HTML')
 
 # === ОБРАБОТЧИКИ СООБЩЕНИЙ ===
 @bot.message_handler(content_types=['text'])
@@ -375,6 +407,14 @@ def handle_callback(call):
 # === ЗАПУСК БОТА ===
 if __name__ == "__main__":
     logger.info("🚀 Запуск бота...")
+
+    # Проверяем настройки
+    if BOT_TOKEN == "1234567890:AAFgLdGfV6r4rS3cT2vQ1wXyZ8bN9mKjHlL":
+        logger.warning("⚠️ Замените BOT_TOKEN на реальный токен!")
+    if CHANNEL_USERNAME == "@your_channel":
+        logger.warning("⚠️ Замените CHANNEL_USERNAME на реальный юзернейм канала!")
+    if ADMIN_IDS == [123456789, 987654321]:
+        logger.warning("⚠️ Замените ADMIN_IDS на реальные ID администраторов!")
 
     # УДАЛЯЕМ WEBHOOK ПЕРЕД ЗАПУСКОМ
     delete_webhook()
