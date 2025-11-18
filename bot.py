@@ -16,7 +16,14 @@ CHANNEL_USERNAME = os.environ['CHANNEL_USERNAME']
 # =================
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Вывод в консоль
+        logging.FileHandler('bot.log')  # Запись в файл
+    ]
+)
 logger = logging.getLogger(__name__)
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -35,33 +42,19 @@ def delete_webhook():
         logger.error(f"❌ Ошибка удаления webhook: {e}")
         return False
 
-# === АВТО-ПИНГ ДЛЯ АКТИВНОСТИ REPL ===
+# === АВТО-ПИНГ ДЛЯ АКТИВНОСТИ ===
 def auto_ping():
-    """Автоматически поддерживает Repl активным"""
+    """Автоматически поддерживает активность"""
     time.sleep(15)
     logger.info("🔄 Запуск авто-пинга...")
 
     while True:
         try:
-            # Основной URL для пинга (с портом 8080)
-            repl_url = "https://c1c7c588-6699-4532-a5b7-ffafbb816933-00-1b5e6vfqk8lfh.sisko.replit.dev:8080"
-            response = requests.get(repl_url, timeout=10)
-            logger.info(f"✅ Авто-пинг успешен: {response.status_code}")
-
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"⚠️ Авто-пинг ошибка: {e}")
-
+            # Простой пинг для поддержания активности
+            logger.info("✅ Бот активен")
         except Exception as e:
-            logger.error(f"❌ Неожиданная ошибка авто-пинга: {e}")
-
-        time.sleep(240)
-
-# === ЗАПУСК FLASK В ФОНЕ ===
-def run_flask():
-    """Запускает Flask сервер в фоновом режиме"""
-    time.sleep(5)  # Даем время запуститься polling
-    logger.info("🌐 Запуск Flask сервера в фоне...")
-    app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
+            logger.error(f"❌ Ошибка авто-пинга: {e}")
+        time.sleep(300)  # Пинг каждые 5 минут
 
 # === БАЗА ДАННЫХ ===
 def init_db():
@@ -146,8 +139,7 @@ def start(message):
     logger.info(f"👤 /start от {user.first_name} (ID: {user.id})")
     bot.send_message(message.chat.id, 
                     "👋 <b>Привет!</b>\n\n"
-                    "Отправь мне сообщение или медиафайл для публикации в канале.\n"
-                    "Всё будет отправлено, наверное.", 
+                    "Отправь мне сообщение или медиафайл для публикации в канале.", 
                     parse_mode='HTML')
 
 @bot.message_handler(commands=['help'])
@@ -164,18 +156,12 @@ def help_command(message):
 • Голосовые сообщения
 • Документы
 • Аудиофайлы
-
-📋 <b>Процесс:</b>
-1. Вы отправляете контент
-2. Администраторы смотрят его
-3. После просмотра - публикация в канале
 """
     bot.send_message(message.chat.id, help_text, parse_mode='HTML')
 
 @bot.message_handler(commands=['stats'])
 def stats_command(message):
     if message.from_user.id not in ADMIN_IDS:
-        bot.send_message(message.chat.id, "❌ Нет прав для просмотра статистики")
         return
 
     try:
@@ -210,7 +196,6 @@ def stats_command(message):
 
     except Exception as e:
         logger.error(f"❌ Ошибка статистики: {e}")
-        bot.send_message(message.chat.id, "❌ Ошибка при получении статистики")
 
 # === ОБРАБОТЧИКИ СООБЩЕНИЙ ===
 @bot.message_handler(content_types=['text'])
@@ -387,11 +372,7 @@ def handle_callback(call):
         logger.error(f"❌ Ошибка callback: {e}")
         bot.answer_callback_query(call.id, "❌ Ошибка обработки")
 
-# === WEBHOOK И FLASK ===
-@app.route('/')
-def home():
-    return "🤖 Бот работает! Статус: ONLINE"
-
+# === ЗАПУСК БОТА ===
 if __name__ == "__main__":
     logger.info("🚀 Запуск бота...")
 
@@ -402,18 +383,14 @@ if __name__ == "__main__":
     ping_thread = threading.Thread(target=auto_ping, daemon=True)
     ping_thread.start()
 
-    # Запускаем Flask в фоне
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-
     # Запускаем polling в ОСНОВНОМ потоке
     logger.info("🤖 Запуск polling...")
-    try:
-        bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
-    except Exception as e:
-        logger.error(f"❌ Ошибка polling: {e}")
-        logger.info("🔄 Перезапуск polling через 10 секунд...")
-        time.sleep(10)
-        # Удаляем webhook еще раз и перезапускаем
-        delete_webhook()
-        bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+    
+    while True:
+        try:
+            bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+        except Exception as e:
+            logger.error(f"❌ Ошибка polling: {e}")
+            logger.info("🔄 Перезапуск polling через 10 секунд...")
+            time.sleep(10)
+            delete_webhook()
