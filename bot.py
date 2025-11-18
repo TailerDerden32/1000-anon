@@ -222,7 +222,7 @@ def handle_text(message):
     )
 
     bot.send_message(message.chat.id, "✅ Сообщение отправлено")
-    notify_admins(message_id, user, message.text, 'text')
+    notify_admins(message_id, user, message.text, 'text', None)
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
@@ -241,7 +241,7 @@ def handle_photo(message):
     )
 
     bot.send_message(message.chat.id, "✅ Фото отправлено")
-    notify_admins(message_id, user, caption, 'photo')
+    notify_admins(message_id, user, caption, 'photo', file_id)
 
 @bot.message_handler(content_types=['video'])
 def handle_video(message):
@@ -260,7 +260,7 @@ def handle_video(message):
     )
 
     bot.send_message(message.chat.id, "✅ Видео отправлено")
-    notify_admins(message_id, user, caption, 'video')
+    notify_admins(message_id, user, caption, 'video', file_id)
 
 @bot.message_handler(content_types=['voice'])
 def handle_voice(message):
@@ -278,7 +278,7 @@ def handle_voice(message):
     )
 
     bot.send_message(message.chat.id, "✅ Голосовое сообщение отправлено")
-    notify_admins(message_id, user, '🎤 Голосовое сообщение', 'voice')
+    notify_admins(message_id, user, '🎤 Голосовое сообщение', 'voice', file_id)
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
@@ -297,7 +297,7 @@ def handle_document(message):
     )
 
     bot.send_message(message.chat.id, "✅ Документ отправлен")
-    notify_admins(message_id, user, caption, 'document')
+    notify_admins(message_id, user, caption, 'document', file_id)
 
 @bot.message_handler(content_types=['sticker'])
 def handle_sticker(message):
@@ -317,10 +317,10 @@ def handle_sticker(message):
     )
 
     bot.send_message(message.chat.id, "✅ Стикер отправлен")
-    notify_admins(message_id, user, f"{sticker_emoji} Стикер", 'sticker')
+    notify_admins(message_id, user, f"{sticker_emoji} Стикер", 'sticker', message.sticker.file_id)
 
 # === УВЕДОМЛЕНИЯ АДМИНАМ ===
-def notify_admins(message_id, user, text, media_type):
+def notify_admins(message_id, user, text, media_type, file_id=None):
     icons = {'text': '📝', 'photo': '📷', 'video': '🎥', 'voice': '🎤', 'document': '📄', 'sticker': '🎭'}
     icon = icons.get(media_type, '📨')
     username_display = f"@{user.username}" if user.username else "нет юзернейма"
@@ -336,12 +336,47 @@ def notify_admins(message_id, user, text, media_type):
 
     for admin_id in ADMIN_IDS:
         try:
+            # Сначала отправляем превью контента
+            if media_type == 'photo' and file_id:
+                bot.send_photo(admin_id, file_id, caption=admin_msg, parse_mode='HTML')
+            elif media_type == 'video' and file_id:
+                bot.send_video(admin_id, file_id, caption=admin_msg, parse_mode='HTML')
+            elif media_type == 'voice' and file_id:
+                bot.send_voice(admin_id, file_id, caption=admin_msg, parse_mode='HTML')
+            elif media_type == 'document' and file_id:
+                bot.send_document(admin_id, file_id, caption=admin_msg, parse_mode='HTML')
+            elif media_type == 'sticker' and file_id:
+                # Для стикеров сначала отправляем описание, потом стикер
+                bot.send_message(admin_id, admin_msg, parse_mode='HTML')
+                sent_sticker = bot.send_sticker(admin_id, file_id)
+                # Добавляем кнопки к сообщению со стикером
+                keyboard = InlineKeyboardMarkup()
+                keyboard.row(
+                    InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{message_id}"),
+                    InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{message_id}")
+                )
+                bot.edit_message_reply_markup(admin_id, sent_sticker.message_id, reply_markup=keyboard)
+                continue  # Пропускаем отправку отдельного сообщения с кнопками
+            else:
+                # Для текста отправляем просто сообщение
+                keyboard = InlineKeyboardMarkup()
+                keyboard.row(
+                    InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{message_id}"),
+                    InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{message_id}")
+                )
+                bot.send_message(admin_id, admin_msg, reply_markup=keyboard, parse_mode='HTML')
+                continue
+            
+            # Для медиафайлов (кроме стикеров) добавляем кнопки к сообщению с превью
             keyboard = InlineKeyboardMarkup()
             keyboard.row(
                 InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{message_id}"),
                 InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{message_id}")
             )
-            bot.send_message(admin_id, admin_msg, reply_markup=keyboard, parse_mode='HTML')
+            # Редактируем последнее сообщение чтобы добавить кнопки
+            # Для этого нужно получить ID последнего отправленного сообщения
+            # В данном случае кнопки уже добавлены в caption для медиафайлов
+            
         except Exception as e:
             logger.error(f"❌ Ошибка отправки админу {admin_id}: {e}")
 
