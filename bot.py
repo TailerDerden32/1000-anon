@@ -10,37 +10,14 @@ import threading
 import time
 
 # === НАСТРОЙКИ ===
-# Получаем настройки из переменных окружения
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-ADMIN_IDS = [int(x.strip()) for x in os.environ.get('ADMIN_IDS', '123456789,987654321').split(',')]
-CHANNEL_USERNAME = os.environ.get('CHANNEL_USERNAME', '@your_channel_username')
-
-# Если переменные окружения не установлены, используем значения ниже
-if BOT_TOKEN == 'YOUR_BOT_TOKEN_HERE':
-    # ⚠️ ЗАМЕНИТЕ ЭТИ ЗНАЧЕНИЯ НА СВОИ ⚠️
-    BOT_TOKEN = "1234567890:AAFgLdGfV6r4rS3cT2vQ1wXyZ8bN9mKjHlL"  # Токен бота от @BotFather
-    ADMIN_IDS = [123456789, 987654321]  # ID администраторов через запятую
-    CHANNEL_USERNAME = "@your_channel"  # Юзернейм канала (с @)
-
-# Вывод информации о настройках (только в логи)
-logger = logging.getLogger(__name__)
+BOT_TOKEN = os.environ['BOT_TOKEN']
+ADMIN_IDS = [int(x.strip()) for x in os.environ['ADMIN_IDS'].split(',')]
+CHANNEL_USERNAME = os.environ['CHANNEL_USERNAME']
 # =================
 
 # Настройка логирования
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),  # Вывод в консоль
-        logging.FileHandler('bot.log')  # Запись в файл
-    ]
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-# Логируем информацию о настройках (без чувствительных данных)
-logger.info(f"🤖 Бот запускается...")
-logger.info(f"👥 Админов: {len(ADMIN_IDS)}")
-logger.info(f"📢 Канал: {CHANNEL_USERNAME}")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -71,6 +48,13 @@ def auto_ping():
         except Exception as e:
             logger.error(f"❌ Ошибка авто-пинга: {e}")
         time.sleep(300)  # Пинг каждые 5 минут
+
+# === ЗАПУСК FLASK В ФОНЕ ===
+def run_flask():
+    """Запускает Flask сервер в фоновом режиме"""
+    time.sleep(5)  # Даем время запуститься polling
+    logger.info("🌐 Запуск Flask сервера в фоне...")
+    app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
 
 # === БАЗА ДАННЫХ ===
 def init_db():
@@ -140,6 +124,9 @@ def send_to_channel(message_data):
         elif message_type == 'document':
             bot.send_document(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
             return True
+        elif message_type == 'sticker':
+            bot.send_sticker(CHANNEL_USERNAME, file_id)
+            return True
         else:
             logger.error(f"❌ Неподдерживаемый тип: {message_type}")
             return False
@@ -155,7 +142,8 @@ def start(message):
     logger.info(f"👤 /start от {user.first_name} (ID: {user.id})")
     bot.send_message(message.chat.id, 
                     "👋 <b>Привет!</b>\n\n"
-                    "Отправь мне сообщение или медиафайл для публикации в канале.", 
+                    "Отправь мне сообщение или медиафайл для публикации в канале.\n"
+                    "Всё будет отправлено, наверное.", 
                     parse_mode='HTML')
 
 @bot.message_handler(commands=['help'])
@@ -172,12 +160,14 @@ def help_command(message):
 • Голосовые сообщения
 • Документы
 • Аудиофайлы
+• Стикеры
 """
     bot.send_message(message.chat.id, help_text, parse_mode='HTML')
 
 @bot.message_handler(commands=['stats'])
 def stats_command(message):
     if message.from_user.id not in ADMIN_IDS:
+        bot.send_message(message.chat.id, "❌ Нет прав для просмотра статистики")
         return
 
     try:
@@ -212,22 +202,7 @@ def stats_command(message):
 
     except Exception as e:
         logger.error(f"❌ Ошибка статистики: {e}")
-
-@bot.message_handler(commands=['info'])
-def info_command(message):
-    """Команда для проверки настроек (только для админов)"""
-    if message.from_user.id not in ADMIN_IDS:
-        return
-        
-    info_text = f"""
-⚙️ <b>Информация о настройках:</b>
-
-🤖 Бот: {'✅ Запущен' if BOT_TOKEN != 'YOUR_BOT_TOKEN_HERE' else '❌ Не настроен'}
-👥 Админов: {len(ADMIN_IDS)}
-📢 Канал: {CHANNEL_USERNAME}
-🆔 Ваш ID: {message.from_user.id}
-"""
-    bot.send_message(message.chat.id, info_text, parse_mode='HTML')
+        bot.send_message(message.chat.id, "❌ Ошибка при получении статистики")
 
 # === ОБРАБОТЧИКИ СООБЩЕНИЙ ===
 @bot.message_handler(content_types=['text'])
@@ -324,9 +299,29 @@ def handle_document(message):
     bot.send_message(message.chat.id, "✅ Документ отправлен")
     notify_admins(message_id, user, caption, 'document')
 
+@bot.message_handler(content_types=['sticker'])
+def handle_sticker(message):
+    user = message.from_user
+    logger.info(f"🎭 Стикер от {user.first_name} (ID: {user.id})")
+    
+    # Сохраняем информацию о стикере
+    sticker_emoji = message.sticker.emoji or '🎭'
+    message_id = save_message_to_db(
+        user.id,
+        user.first_name or 'User',
+        user.username or '',
+        'sticker',
+        f"{sticker_emoji} Стикер",
+        message.sticker.file_id,
+        'sticker'
+    )
+
+    bot.send_message(message.chat.id, "✅ Стикер отправлен")
+    notify_admins(message_id, user, f"{sticker_emoji} Стикер", 'sticker')
+
 # === УВЕДОМЛЕНИЯ АДМИНАМ ===
 def notify_admins(message_id, user, text, media_type):
-    icons = {'text': '📝', 'photo': '📷', 'video': '🎥', 'voice': '🎤', 'document': '📄'}
+    icons = {'text': '📝', 'photo': '📷', 'video': '🎥', 'voice': '🎤', 'document': '📄', 'sticker': '🎭'}
     icon = icons.get(media_type, '📨')
     username_display = f"@{user.username}" if user.username else "нет юзернейма"
 
@@ -404,17 +399,13 @@ def handle_callback(call):
         logger.error(f"❌ Ошибка callback: {e}")
         bot.answer_callback_query(call.id, "❌ Ошибка обработки")
 
-# === ЗАПУСК БОТА ===
+# === WEBHOOK И FLASK ===
+@app.route('/')
+def home():
+    return "🤖 Бот работает! Статус: ONLINE"
+
 if __name__ == "__main__":
     logger.info("🚀 Запуск бота...")
-
-    # Проверяем настройки
-    if BOT_TOKEN == "1234567890:AAFgLdGfV6r4rS3cT2vQ1wXyZ8bN9mKjHlL":
-        logger.warning("⚠️ Замените BOT_TOKEN на реальный токен!")
-    if CHANNEL_USERNAME == "@your_channel":
-        logger.warning("⚠️ Замените CHANNEL_USERNAME на реальный юзернейм канала!")
-    if ADMIN_IDS == [123456789, 987654321]:
-        logger.warning("⚠️ Замените ADMIN_IDS на реальные ID администраторов!")
 
     # УДАЛЯЕМ WEBHOOK ПЕРЕД ЗАПУСКОМ
     delete_webhook()
@@ -423,14 +414,18 @@ if __name__ == "__main__":
     ping_thread = threading.Thread(target=auto_ping, daemon=True)
     ping_thread.start()
 
+    # Запускаем Flask в фоне
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
     # Запускаем polling в ОСНОВНОМ потоке
     logger.info("🤖 Запуск polling...")
-    
-    while True:
-        try:
-            bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
-        except Exception as e:
-            logger.error(f"❌ Ошибка polling: {e}")
-            logger.info("🔄 Перезапуск polling через 10 секунд...")
-            time.sleep(10)
-            delete_webhook()
+    try:
+        bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+    except Exception as e:
+        logger.error(f"❌ Ошибка polling: {e}")
+        logger.info("🔄 Перезапуск polling через 10 секунд...")
+        time.sleep(10)
+        # Удаляем webhook еще раз и перезапускаем
+        delete_webhook()
+        bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
