@@ -10,9 +10,16 @@ import threading
 import time
 
 # === НАСТРОЙКИ ===
-BOT_TOKEN = os.environ['BOT_TOKEN']
-ADMIN_IDS = [int(x.strip()) for x in os.environ['ADMIN_IDS'].split(',')]
-CHANNEL_USERNAME = os.environ['CHANNEL_USERNAME']
+# Если переменные окружения не работают, укажите значения прямо здесь
+try:
+    BOT_TOKEN = os.environ['BOT_TOKEN']
+    ADMIN_IDS = [int(x.strip()) for x in os.environ['ADMIN_IDS'].split(',')]
+    CHANNEL_USERNAME = os.environ['CHANNEL_USERNAME']
+except:
+    # ⚠️ ЗАМЕНИТЕ ЭТИ ЗНАЧЕНИЯ НА СВОИ ⚠️
+    BOT_TOKEN = "ваш_токен_бота_от_BotFather"
+    ADMIN_IDS = [5625365921]  # Ваш ID
+    CHANNEL_USERNAME = "@tkstpgoida"  # Юзернейм канала
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -233,6 +240,40 @@ def info_command(message):
 🆔 Ваш ID: {message.from_user.id}
 """
     bot.send_message(message.chat.id, info_text, parse_mode='HTML')
+
+@bot.message_handler(commands=['pending'])
+def pending_messages(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    try:
+        conn = sqlite3.connect('bot.db', check_same_thread=False)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM messages WHERE status = 'pending' ORDER BY id DESC LIMIT 10")
+        pending_messages = cursor.fetchall()
+        
+        if not pending_messages:
+            bot.send_message(message.chat.id, "📭 Нет сообщений, ожидающих модерации")
+            return
+        
+        response = "📋 <b>Сообщения ожидающие модерации:</b>\n\n"
+        
+        for msg in pending_messages:
+            msg_id, user_id, user_name, username, text, msg_type, file_id, file_type, timestamp, status = msg
+            response += f"#{msg_id} - {user_name} - {msg_type}\n"
+            if text and len(text) > 50:
+                response += f"📝 {text[:50]}...\n"
+            elif text:
+                response += f"📝 {text}\n"
+            response += "━━━━━━━━━━━━━━━━━━━━\n"
+        
+        bot.send_message(message.chat.id, response, parse_mode='HTML')
+        conn.close()
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения ожидающих сообщений: {e}")
+        bot.send_message(message.chat.id, "❌ Ошибка при получении списка сообщений")
 
 # === ОБРАБОТЧИКИ СООБЩЕНИЙ ===
 @bot.message_handler(content_types=['text'])
@@ -494,4 +535,5 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
