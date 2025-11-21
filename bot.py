@@ -390,47 +390,64 @@ def send_to_channel(message_data, publish_type='normal'):
         log_error('send_to_channel', str(e))
         return False
 
-def send_anonymous_preview(admin_id, message_data, message_id):
-    """Отправляет админу анонимный вариант сообщения для пересылки"""
+def send_anonymous_version(admin_id, message_data, message_id):
+    """Отправляет админу анонимную версию сообщения для ручной пересылки в канал"""
     try:
         message_type = message_data.get('message_type')
         text = message_data.get('text', '')
         file_id = message_data.get('file_id')
         
-        preview_text = f"👁‍🗨 <b>Анонимный вариант сообщения #{message_id}</b>\n\n"
-        if text:
-            preview_text += f"📝 <b>Текст:</b> {text}\n\n"
-        preview_text += "✅ Этот вариант будет отправлен в канал без упоминания автора"
+        info_text = f"🔄 <b>Анонимная версия сообщения #{message_id}</b>\n\n" \
+                   f"📋 <b>Просто перешлите это сообщение в канал</b>\n" \
+                   f"👤 Автор будет скрыт при пересылке"
         
+        # Сначала отправляем инструкцию
+        bot.send_message(admin_id, info_text, parse_mode='HTML')
+        
+        # Затем отправляем само сообщение для пересылки
+        if message_type == 'text':
+            bot.send_message(admin_id, text, parse_mode='HTML')
+        elif message_type == 'photo':
+            if text:
+                bot.send_photo(admin_id, file_id, caption=text, parse_mode='HTML')
+            else:
+                bot.send_photo(admin_id, file_id)
+        elif message_type == 'video':
+            if text:
+                bot.send_video(admin_id, file_id, caption=text, parse_mode='HTML')
+            else:
+                bot.send_video(admin_id, file_id)
+        elif message_type == 'voice':
+            bot.send_voice(admin_id, file_id)
+        elif message_type == 'document':
+            if text:
+                bot.send_document(admin_id, file_id, caption=text, parse_mode='HTML')
+            else:
+                bot.send_document(admin_id, file_id)
+        elif message_type == 'sticker':
+            bot.send_sticker(admin_id, file_id)
+        
+        # Добавляем кнопку для автоматической публикации на случай, если админ захочет
         from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-        
-        # Отправляем превью контента
-        if message_type == 'photo' and file_id:
-            msg = bot.send_photo(admin_id, file_id, caption=preview_text, parse_mode='HTML')
-        elif message_type == 'video' and file_id:
-            msg = bot.send_video(admin_id, file_id, caption=preview_text, parse_mode='HTML')
-        elif message_type == 'voice' and file_id:
-            msg = bot.send_voice(admin_id, file_id, caption=preview_text, parse_mode='HTML')
-        elif message_type == 'document' and file_id:
-            msg = bot.send_document(admin_id, file_id, caption=preview_text, parse_mode='HTML')
-        elif message_type == 'sticker' and file_id:
-            bot.send_message(admin_id, preview_text, parse_mode='HTML')
-            msg = bot.send_sticker(admin_id, file_id)
-        else:
-            msg = bot.send_message(admin_id, preview_text, parse_mode='HTML')
-        
-        # Добавляем кнопки подтверждения
         keyboard = InlineKeyboardMarkup()
         keyboard.row(
-            InlineKeyboardButton("✅ Опубликовать анонимно", callback_data=f"confirm_forward_{message_id}"),
-            InlineKeyboardButton("❌ Отмена", callback_data=f"cancel_forward_{message_id}")
+            InlineKeyboardButton("🤖 Опубликовать автоматически", callback_data=f"auto_forward_{message_id}"),
+            InlineKeyboardButton("✅ Отметить как опубликовано", callback_data=f"mark_published_{message_id}")
         )
         
-        bot.edit_message_reply_markup(admin_id, msg.message_id, reply_markup=keyboard)
+        bot.send_message(
+            admin_id,
+            "📝 <b>Что дальше?</b>\n\n"
+            "• <b>Перешлите</b> сообщение выше в канал (автор будет скрыт)\n"
+            "• Или используйте кнопки ниже",
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
+        
         return True
         
     except Exception as e:
-        logger.error(f"❌ Ошибка отправки превью админу {admin_id}: {e}")
+        logger.error(f"❌ Ошибка отправки анонимной версии админу {admin_id}: {e}")
         return False
 
 # === СТАТИСТИКА РАБОТЫ БОТА ===
@@ -907,11 +924,11 @@ def notify_admins(message_id, user, text, media_type, file_id=None, original_mes
             # Кнопки
             keyboard = InlineKeyboardMarkup()
             keyboard.row(
-                InlineKeyboardButton("📝 Обычная публикация", callback_data=f"publish_normal_{message_id}"),
-                InlineKeyboardButton("🔄 Анонимная пересылка", callback_data=f"preview_forward_{message_id}")
+                InlineKeyboardButton("📝 Опубликовать", callback_data=f"publish_normal_{message_id}"),
+                InlineKeyboardButton("🔄 Анонимная версия", callback_data=f"send_anonymous_{message_id}")
             )
             keyboard.row(
-                InlineKeyboardButton("💬 Ответить пользователю", callback_data=f"reply_{message_id}"),
+                InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{message_id}"),
                 InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{message_id}")
             )
             
@@ -957,7 +974,7 @@ def handle_callback(call):
             cursor = conn.cursor()
             if success:
                 cursor.execute("UPDATE messages SET status = 'approved' WHERE id = ?", (message_id,))
-                status_text = f"✅ Сообщение #{message_id} опубликовано (обычная публикация)"
+                status_text = f"✅ Сообщение #{message_id} опубликовано"
                 logger.info(f"✅ Сообщение #{message_id} опубликовано")
             else:
                 cursor.execute("UPDATE messages SET status = 'error' WHERE id = ?", (message_id,))
@@ -975,7 +992,7 @@ def handle_callback(call):
             except:
                 bot.send_message(call.message.chat.id, f"{status_text}\n👤 Обработал: {call.from_user.first_name}")
 
-        elif call.data.startswith('preview_forward_'):
+        elif call.data.startswith('send_anonymous_'):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
@@ -989,15 +1006,15 @@ def handle_callback(call):
                 bot.answer_callback_query(call.id, f"Сообщение {status_texts.get(status, status)}")
                 return
 
-            # Отправляем админу анонимный превью
-            bot.answer_callback_query(call.id, "👁‍🗨 Показываю анонимный вариант...")
-            send_anonymous_preview(call.from_user.id, {
+            # Отправляем админу анонимную версию для ручной пересылки
+            bot.answer_callback_query(call.id, "🔄 Отправляю анонимную версию...")
+            send_anonymous_version(call.from_user.id, {
                 'message_type': message_data[5],
                 'text': message_data[4],
                 'file_id': message_data[6]
             }, message_id)
 
-        elif call.data.startswith('confirm_forward_'):
+        elif call.data.startswith('auto_forward_'):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
@@ -1011,7 +1028,7 @@ def handle_callback(call):
                 bot.answer_callback_query(call.id, f"Сообщение {status_texts.get(status, status)}")
                 return
 
-            # Устанавливаем тип публикации "пересылка"
+            # Автоматическая публикация анонимной версии
             update_publish_type(message_id, 'forward')
             
             success = send_to_channel({
@@ -1042,12 +1059,21 @@ def handle_callback(call):
             except:
                 bot.send_message(call.message.chat.id, f"{status_text}\n👤 Обработал: {call.from_user.first_name}")
 
-        elif call.data.startswith('cancel_forward_'):
+        elif call.data.startswith('mark_published_'):
             message_id = int(call.data.split('_')[2])
-            bot.answer_callback_query(call.id, "❌ Анонимная публикация отменена")
+            conn = sqlite3.connect('bot.db', check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE messages SET status = 'approved', publish_type = 'forward' WHERE id = ?", (message_id,))
+            conn.commit()
+            conn.close()
+
+            status_text = f"✅ Сообщение #{message_id} отмечено как опубликованное"
+            logger.info(f"✅ Сообщение #{message_id} отмечено как опубликованное")
+
+            bot.answer_callback_query(call.id, "✅ Сообщение отмечено как опубликованное")
             try:
                 bot.edit_message_text(
-                    f"❌ Анонимная публикация сообщения #{message_id} отменена\n👤 Отменил: {call.from_user.first_name}", 
+                    f"{status_text}\n👤 Обработал: {call.from_user.first_name}", 
                     call.message.chat.id, 
                     call.message.message_id,
                     reply_markup=None
@@ -1136,6 +1162,7 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
 
 
