@@ -947,11 +947,17 @@ def handle_callback(call):
         return
 
     try:
+        # Обработка обычной публикации
         if call.data.startswith('publish_normal_'):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
-            if message_data and message_data[9] != 'pending':
+            # Проверяем, найдено ли сообщение в базе
+            if not message_data:
+                bot.answer_callback_query(call.id, f"❌ Сообщение #{message_id} не найдено в базе")
+                return
+                
+            if message_data[9] != 'pending':  # status
                 status = message_data[9]
                 status_texts = {
                     'approved': '✅ уже одобрено',
@@ -965,9 +971,9 @@ def handle_callback(call):
             update_publish_type(message_id, 'normal')
             
             success = send_to_channel({
-                'message_type': message_data[5],
-                'text': message_data[4],
-                'file_id': message_data[6]
+                'message_type': message_data[5],  # message_type
+                'text': message_data[4],  # message_text
+                'file_id': message_data[6]  # file_id
             }, 'normal')
 
             conn = sqlite3.connect('bot.db', check_same_thread=False)
@@ -992,11 +998,16 @@ def handle_callback(call):
             except:
                 bot.send_message(call.message.chat.id, f"{status_text}\n👤 Обработал: {call.from_user.first_name}")
 
+        # Обработка анонимной версии
         elif call.data.startswith('send_anonymous_'):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
-            if message_data and message_data[9] != 'pending':
+            if not message_data:
+                bot.answer_callback_query(call.id, f"❌ Сообщение #{message_id} не найдено в базе")
+                return
+                
+            if message_data[9] != 'pending':
                 status = message_data[9]
                 status_texts = {
                     'approved': '✅ уже одобрено',
@@ -1014,11 +1025,16 @@ def handle_callback(call):
                 'file_id': message_data[6]
             }, message_id)
 
+        # Автоматическая публикация анонимной версии
         elif call.data.startswith('auto_forward_'):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
-            if message_data and message_data[9] != 'pending':
+            if not message_data:
+                bot.answer_callback_query(call.id, f"❌ Сообщение #{message_id} не найдено в базе")
+                return
+                
+            if message_data[9] != 'pending':
                 status = message_data[9]
                 status_texts = {
                     'approved': '✅ уже одобрено',
@@ -1059,6 +1075,7 @@ def handle_callback(call):
             except:
                 bot.send_message(call.message.chat.id, f"{status_text}\n👤 Обработал: {call.from_user.first_name}")
 
+        # Отметка как опубликованного
         elif call.data.startswith('mark_published_'):
             message_id = int(call.data.split('_')[2])
             conn = sqlite3.connect('bot.db', check_same_thread=False)
@@ -1081,12 +1098,14 @@ def handle_callback(call):
             except:
                 pass
 
+        # Ответ пользователю
         elif call.data.startswith('reply_'):
             message_id = int(call.data.split('_')[1])
             # Сохраняем ID сообщения для ответа
             bot.answer_callback_query(call.id, "💬 Введите ответ пользователю")
             bot.send_message(call.message.chat.id, f"💬 Введите ответ для сообщения #{message_id}:")
 
+        # Отклонение сообщения
         elif call.data.startswith('reject_'):
             message_id = int(call.data.split('_')[1])
             conn = sqlite3.connect('bot.db', check_same_thread=False)
@@ -1162,6 +1181,7 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
 
 
