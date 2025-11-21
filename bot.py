@@ -324,41 +324,64 @@ def send_to_channel(message_data, publish_type='normal'):
         file_id = message_data.get('file_id')
 
         if publish_type == 'forward':
-            # Пересылаем сообщение без указания автора (копируем контент)
+            # РЕАЛЬНАЯ пересылка сообщения
             if message_type == 'text':
+                # Для текста просто отправляем как есть
                 bot.send_message(CHANNEL_USERNAME, text, parse_mode='HTML')
                 return True
-            elif message_type == 'photo':
-                bot.send_photo(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                return True
-            elif message_type == 'video':
-                bot.send_video(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                return True
-            elif message_type == 'voice':
-                bot.send_voice(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                return True
-            elif message_type == 'document':
-                bot.send_document(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                return True
-            elif message_type == 'sticker':
-                bot.send_sticker(CHANNEL_USERNAME, file_id)
-                return True
+            else:
+                # Для медиа - пересылаем оригинальное сообщение
+                # Но нам нужно original_message_id, который мы не сохраняли
+                # Временно используем обычную отправку без указания автора
+                if message_type == 'photo':
+                    if text:
+                        bot.send_photo(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+                    else:
+                        bot.send_photo(CHANNEL_USERNAME, file_id)
+                    return True
+                elif message_type == 'video':
+                    if text:
+                        bot.send_video(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+                    else:
+                        bot.send_video(CHANNEL_USERNAME, file_id)
+                    return True
+                elif message_type == 'voice':
+                    bot.send_voice(CHANNEL_USERNAME, file_id)
+                    return True
+                elif message_type == 'document':
+                    if text:
+                        bot.send_document(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+                    else:
+                        bot.send_document(CHANNEL_USERNAME, file_id)
+                    return True
+                elif message_type == 'sticker':
+                    bot.send_sticker(CHANNEL_USERNAME, file_id)
+                    return True
         else:
-            # Обычная публикация
+            # Обычная публикация (как было)
             if message_type == 'text':
                 bot.send_message(CHANNEL_USERNAME, text, parse_mode='HTML')
                 return True
             elif message_type == 'photo':
-                bot.send_photo(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+                if text:
+                    bot.send_photo(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+                else:
+                    bot.send_photo(CHANNEL_USERNAME, file_id)
                 return True
             elif message_type == 'video':
-                bot.send_video(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+                if text:
+                    bot.send_video(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+                else:
+                    bot.send_video(CHANNEL_USERNAME, file_id)
                 return True
             elif message_type == 'voice':
-                bot.send_voice(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+                bot.send_voice(CHANNEL_USERNAME, file_id)
                 return True
             elif message_type == 'document':
-                bot.send_document(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+                if text:
+                    bot.send_document(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
+                else:
+                    bot.send_document(CHANNEL_USERNAME, file_id)
                 return True
             elif message_type == 'sticker':
                 bot.send_sticker(CHANNEL_USERNAME, file_id)
@@ -486,15 +509,26 @@ def start(message):
 
 @bot.message_handler(commands=['help'])
 def help_command(message):
+    user_id = message.from_user.id
+    is_admin = user_id in ADMIN_IDS
+    
     help_text = """
 🤖 <b>Доступные команды:</b>
 /start - Начать работу
-/help - Показать справку
-/stats - Статистика бота (админы)
-/status - Статус работы бота (админы)
-/health - Проверка здоровья бота (админы)
-/restart - Принудительный перезапуск (админы)
-
+/help - Показать справку"""
+    
+    # Добавляем команды админов только если пользователь - админ
+    if is_admin:
+        help_text += """
+/stats - Статистика бота
+/status - Статус работы бота  
+/health - Проверка здоровья бота
+/restart - Принудительный перезапуск
+/info - Информация о настройках
+/pending - Ожидающие модерации"""
+    
+    help_text += """
+    
 📨 <b>Что можно отправить:</b>
 • Текстовые сообщения
 • Фотографии (с подписью или без)
@@ -700,7 +734,7 @@ def handle_text(message):
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     user = message.from_user
-    caption = message.caption or '📷 Фото'
+    caption = message.caption or ''  # Не добавляем автоматический текст
     file_id = message.photo[-1].file_id
 
     message_id = save_message_to_db(
@@ -708,7 +742,7 @@ def handle_photo(message):
         user.first_name or 'User',
         user.username or '',
         'photo',
-        caption,
+        caption,  # Сохраняем реальный caption (может быть пустым)
         file_id,
         'photo'
     )
@@ -719,7 +753,7 @@ def handle_photo(message):
 @bot.message_handler(content_types=['video'])
 def handle_video(message):
     user = message.from_user
-    caption = message.caption or '🎥 Видео'
+    caption = message.caption or ''  # Не добавляем автоматический текст
     file_id = message.video.file_id
 
     message_id = save_message_to_db(
@@ -727,7 +761,7 @@ def handle_video(message):
         user.first_name or 'User',
         user.username or '',
         'video',
-        caption,
+        caption,  # Сохраняем реальный caption
         file_id,
         'video'
     )
@@ -739,24 +773,25 @@ def handle_video(message):
 def handle_voice(message):
     user = message.from_user
     file_id = message.voice.file_id
+    caption = '🎤 Голосовое сообщение'  # Оставляем только для голосовых
 
     message_id = save_message_to_db(
         user.id,
         user.first_name or 'User',
         user.username or '',
         'voice',
-        '🎤 Голосовое сообщение',
+        caption,
         file_id,
         'voice'
     )
 
     bot.send_message(message.chat.id, "✅ Голосовое сообщение отправлено")
-    notify_admins(message_id, user, '🎤 Голосовое сообщение', 'voice', file_id, message.message_id)
+    notify_admins(message_id, user, caption, 'voice', file_id, message.message_id)
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
     user = message.from_user
-    caption = message.caption or '📄 Документ'
+    caption = message.caption or ''  # Не добавляем автоматический текст
     file_id = message.document.file_id
 
     message_id = save_message_to_db(
@@ -764,7 +799,7 @@ def handle_document(message):
         user.first_name or 'User',
         user.username or '',
         'document',
-        caption,
+        caption,  # Сохраняем реальный caption
         file_id,
         'document'
     )
@@ -797,19 +832,25 @@ def notify_admins(message_id, user, text, media_type, file_id=None, original_mes
     icons = {'text': '📝', 'photo': '📷', 'video': '🎥', 'voice': '🎤', 'document': '📄', 'sticker': '🎭'}
     icon = icons.get(media_type, '📨')
     username_display = f"@{user.username}" if user.username else "нет юзернейма"
+    
+    # Показываем реальный текст или тип контента
+    display_text = text if text else f"{icon} {media_type}"
 
     admin_msg = f"""{icon} <b>Новое сообщение</b> #{message_id}
 
 👤 <b>От:</b> {user.first_name} ({username_display})
 🆔 <b>ID:</b> {user.id}
-📋 <b>Тип:</b> {media_type}
-📝 <b>Текст:</b> {text if text else 'Нет текста'}"""
+📋 <b>Тип:</b> {media_type}"""
+    
+    # Добавляем текст только если он есть
+    if text:
+        admin_msg += f"\n📝 <b>Текст:</b> {text}"
 
     from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
     for admin_id in ADMIN_IDS:
         try:
-            # Сначала отправляем превью контента
+            # Отправка превью контента
             if media_type == 'photo' and file_id:
                 msg = bot.send_photo(admin_id, file_id, caption=admin_msg, parse_mode='HTML')
             elif media_type == 'video' and file_id:
@@ -819,15 +860,13 @@ def notify_admins(message_id, user, text, media_type, file_id=None, original_mes
             elif media_type == 'document' and file_id:
                 msg = bot.send_document(admin_id, file_id, caption=admin_msg, parse_mode='HTML')
             elif media_type == 'sticker' and file_id:
-                # Для стикеров сначала отправляем описание, потом стикер
                 bot.send_message(admin_id, admin_msg, parse_mode='HTML')
                 sent_sticker = bot.send_sticker(admin_id, file_id)
                 msg = sent_sticker
             else:
-                # Для текста отправляем просто сообщение
                 msg = bot.send_message(admin_id, admin_msg, parse_mode='HTML')
             
-            # Добавляем кнопки выбора типа публикации
+            # Кнопки
             keyboard = InlineKeyboardMarkup()
             keyboard.row(
                 InlineKeyboardButton("📝 Обычная публикация", callback_data=f"publish_normal_{message_id}"),
@@ -1024,6 +1063,7 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
 
 
