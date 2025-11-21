@@ -472,43 +472,71 @@ def handle_callback(call):
         return
 
     try:
+        message_id = int(call.data.split('_')[1])
+        message_data = get_message_from_db(message_id)
+        
+        # Проверяем статус сообщения
+        if message_data and message_data[9] != 'pending':
+            status = message_data[9]
+            status_texts = {
+                'approved': '✅ уже одобрено',
+                'rejected': '❌ уже отклонено', 
+                'error': '⚠️ ошибка публикации'
+            }
+            bot.answer_callback_query(
+                call.id, 
+                f"Сообщение {status_texts.get(status, status)}"
+            )
+            return
+
         if call.data.startswith('approve_'):
-            message_id = int(call.data.split('_')[1])
-            message_data = get_message_from_db(message_id)
+            success = send_to_channel({
+                'message_type': message_data[5],  # message_type
+                'text': message_data[4],         # message_text
+                'file_id': message_data[6]       # file_id
+            })
 
-            if message_data:
-                success = send_to_channel({
-                    'message_type': message_data[5],  # message_type
-                    'text': message_data[4],         # message_text
-                    'file_id': message_data[6]       # file_id
-                })
-
-                conn = sqlite3.connect('bot.db', check_same_thread=False)
-                cursor = conn.cursor()
-                if success:
-                    cursor.execute("UPDATE messages SET status = 'approved' WHERE id = ?", (message_id,))
-                    status_text = f"✅ Сообщение #{message_id} одобрено и опубликовано"
-                    logger.info(f"✅ Сообщение #{message_id} опубликовано")
-                else:
-                    cursor.execute("UPDATE messages SET status = 'error' WHERE id = ?", (message_id,))
-                    status_text = f"❌ Сообщение #{message_id} не удалось опубликовать"
-                conn.commit()
-                conn.close()
-
-                bot.edit_message_text(status_text, call.message.chat.id, call.message.message_id)
+            conn = sqlite3.connect('bot.db', check_same_thread=False)
+            cursor = conn.cursor()
+            if success:
+                cursor.execute("UPDATE messages SET status = 'approved' WHERE id = ?", (message_id,))
+                status_text = f"✅ Сообщение #{message_id} одобрено и опубликовано"
+                logger.info(f"✅ Сообщение #{message_id} опубликовано")
             else:
-                bot.edit_message_text(f"❌ Сообщение #{message_id} не найдено", call.message.chat.id, call.message.message_id)
+                cursor.execute("UPDATE messages SET status = 'error' WHERE id = ?", (message_id,))
+                status_text = f"❌ Сообщение #{message_id} не удалось опубликовать"
+            conn.commit()
+            conn.close()
+
+            try:
+                bot.edit_message_text(
+                    f"{status_text}\n👤 Обработал: {call.from_user.first_name}", 
+                    call.message.chat.id, 
+                    call.message.message_id,
+                    reply_markup=None  # Удаляем кнопки
+                )
+            except:
+                bot.send_message(call.message.chat.id, f"{status_text}\n👤 Обработал: {call.from_user.first_name}")
 
         elif call.data.startswith('reject_'):
-            message_id = int(call.data.split('_')[1])
             conn = sqlite3.connect('bot.db', check_same_thread=False)
             cursor = conn.cursor()
             cursor.execute("UPDATE messages SET status = 'rejected' WHERE id = ?", (message_id,))
             conn.commit()
             conn.close()
 
-            bot.edit_message_text(f"❌ Сообщение #{message_id} отклонено", call.message.chat.id, call.message.message_id)
+            status_text = f"❌ Сообщение #{message_id} отклонено"
             logger.info(f"❌ Сообщение #{message_id} отклонено")
+
+            try:
+                bot.edit_message_text(
+                    f"{status_text}\n👤 Обработал: {call.from_user.first_name}", 
+                    call.message.chat.id, 
+                    call.message.message_id,
+                    reply_markup=None  # Удаляем кнопки
+                )
+            except:
+                bot.send_message(call.message.chat.id, f"{status_text}\n👤 Обработал: {call.from_user.first_name}")
 
         bot.answer_callback_query(call.id, "✅ Действие выполнено")
 
@@ -546,6 +574,7 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
 
 
