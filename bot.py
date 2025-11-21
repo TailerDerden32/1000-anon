@@ -10,16 +10,18 @@ import threading
 import time
 
 # === НАСТРОЙКИ ===
-# Если переменные окружения не работают, укажите значения прямо здесь
-try:
-    BOT_TOKEN = os.environ['BOT_TOKEN']
-    ADMIN_IDS = [int(x.strip()) for x in os.environ['ADMIN_IDS'].split(',')]
-    CHANNEL_USERNAME = os.environ['CHANNEL_USERNAME']
-except:
-    # ⚠️ ЗАМЕНИТЕ ЭТИ ЗНАЧЕНИЯ НА СВОИ ⚠️
-    BOT_TOKEN = "ваш_токен_бота_от_BotFather"
-    ADMIN_IDS = [5625365921]  # Ваш ID
-    CHANNEL_USERNAME = "@tkstpgoida"  # Юзернейм канала
+BOT_TOKEN = os.environ['BOT_TOKEN']
+ADMIN_IDS = [int(x.strip()) for x in os.environ['ADMIN_IDS'].split(',')]
+CHANNEL_USERNAME = os.environ['CHANNEL_USERNAME']
+
+# Проверяем переменные окружения
+required_vars = ['BOT_TOKEN', 'ADMIN_IDS', 'CHANNEL_USERNAME']
+missing_vars = [var for var in required_vars if not os.environ.get(var)]
+
+if missing_vars:
+    print(f"❌ Отсутствуют переменные окружения: {', '.join(missing_vars)}")
+    print("⚠️ Установите их в настройках bothost")
+    exit(1)
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -27,6 +29,15 @@ logger = logging.getLogger(__name__)
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
+
+# Проверка бота
+try:
+    bot_info = bot.get_me()
+    logger.info(f"✅ Бот запущен: {bot_info.first_name} (@{bot_info.username})")
+except Exception as e:
+    logger.error(f"❌ Ошибка доступа к боту: {e}")
+    logger.error("⚠️ Проверьте правильность BOT_TOKEN")
+    exit(1)
 
 # Проверка канала
 try:
@@ -535,5 +546,6 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
 
