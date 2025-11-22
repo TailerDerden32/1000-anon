@@ -204,8 +204,24 @@ def auto_ping():
 def run_flask():
     """Запускает Flask сервер в фоновом режиме"""
     time.sleep(5)  # Даем время запуститься polling
-    logger.info("🌐 Запуск Flask сервера в фоне...")
-    app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
+    
+    # Пробуем разные порты если 8080 занят
+    ports = [8080, 8081, 8082, 8083, 8084]
+    
+    for port in ports:
+        try:
+            logger.info(f"🌐 Попытка запуска Flask сервера на порту {port}...")
+            app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
+            break
+        except OSError as e:
+            if "Address already in use" in str(e):
+                logger.warning(f"⚠️ Порт {port} занят, пробуем следующий...")
+                continue
+            else:
+                logger.error(f"❌ Ошибка запуска Flask: {e}")
+                break
+    else:
+        logger.error("❌ Не удалось запустить Flask сервер: все порты заняты")
 
 # === БАЗА ДАННЫХ ===
 def init_db():
@@ -324,30 +340,21 @@ def send_to_channel(message_data, publish_type='normal'):
         file_id = message_data.get('file_id')
 
         if publish_type == 'forward':
-            # Анонимная пересылка - отправляем как есть, но без упоминания автора
+            # Пересылаем сообщение без указания автора (копируем контент)
             if message_type == 'text':
                 bot.send_message(CHANNEL_USERNAME, text, parse_mode='HTML')
                 return True
             elif message_type == 'photo':
-                if text:
-                    bot.send_photo(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                else:
-                    bot.send_photo(CHANNEL_USERNAME, file_id)
+                bot.send_photo(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
                 return True
             elif message_type == 'video':
-                if text:
-                    bot.send_video(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                else:
-                    bot.send_video(CHANNEL_USERNAME, file_id)
+                bot.send_video(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
                 return True
             elif message_type == 'voice':
-                bot.send_voice(CHANNEL_USERNAME, file_id)
+                bot.send_voice(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
                 return True
             elif message_type == 'document':
-                if text:
-                    bot.send_document(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                else:
-                    bot.send_document(CHANNEL_USERNAME, file_id)
+                bot.send_document(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
                 return True
             elif message_type == 'sticker':
                 bot.send_sticker(CHANNEL_USERNAME, file_id)
@@ -358,25 +365,16 @@ def send_to_channel(message_data, publish_type='normal'):
                 bot.send_message(CHANNEL_USERNAME, text, parse_mode='HTML')
                 return True
             elif message_type == 'photo':
-                if text:
-                    bot.send_photo(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                else:
-                    bot.send_photo(CHANNEL_USERNAME, file_id)
+                bot.send_photo(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
                 return True
             elif message_type == 'video':
-                if text:
-                    bot.send_video(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                else:
-                    bot.send_video(CHANNEL_USERNAME, file_id)
+                bot.send_video(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
                 return True
             elif message_type == 'voice':
-                bot.send_voice(CHANNEL_USERNAME, file_id)
+                bot.send_voice(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
                 return True
             elif message_type == 'document':
-                if text:
-                    bot.send_document(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                else:
-                    bot.send_document(CHANNEL_USERNAME, file_id)
+                bot.send_document(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
                 return True
             elif message_type == 'sticker':
                 bot.send_sticker(CHANNEL_USERNAME, file_id)
@@ -388,66 +386,6 @@ def send_to_channel(message_data, publish_type='normal'):
     except Exception as e:
         logger.error(f"❌ Ошибка отправки в канал: {e}")
         log_error('send_to_channel', str(e))
-        return False
-
-def send_anonymous_version(admin_id, message_data, message_id):
-    """Отправляет админу анонимную версию сообщения для ручной пересылки в канал"""
-    try:
-        message_type = message_data.get('message_type')
-        text = message_data.get('text', '')
-        file_id = message_data.get('file_id')
-        
-        info_text = f"🔄 <b>Анонимная версия сообщения #{message_id}</b>\n\n" \
-                   f"📋 <b>Просто перешлите это сообщение в канал</b>\n" \
-                   f"👤 Автор будет скрыт при пересылке"
-        
-        # Сначала отправляем инструкцию
-        bot.send_message(admin_id, info_text, parse_mode='HTML')
-        
-        # Затем отправляем само сообщение для пересылки
-        if message_type == 'text':
-            bot.send_message(admin_id, text, parse_mode='HTML')
-        elif message_type == 'photo':
-            if text:
-                bot.send_photo(admin_id, file_id, caption=text, parse_mode='HTML')
-            else:
-                bot.send_photo(admin_id, file_id)
-        elif message_type == 'video':
-            if text:
-                bot.send_video(admin_id, file_id, caption=text, parse_mode='HTML')
-            else:
-                bot.send_video(admin_id, file_id)
-        elif message_type == 'voice':
-            bot.send_voice(admin_id, file_id)
-        elif message_type == 'document':
-            if text:
-                bot.send_document(admin_id, file_id, caption=text, parse_mode='HTML')
-            else:
-                bot.send_document(admin_id, file_id)
-        elif message_type == 'sticker':
-            bot.send_sticker(admin_id, file_id)
-        
-        # Добавляем кнопку для автоматической публикации на случай, если админ захочет
-        from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-        keyboard = InlineKeyboardMarkup()
-        keyboard.row(
-            InlineKeyboardButton("🤖 Опубликовать автоматически", callback_data=f"auto_forward_{message_id}"),
-            InlineKeyboardButton("✅ Отметить как опубликовано", callback_data=f"mark_published_{message_id}")
-        )
-        
-        bot.send_message(
-            admin_id,
-            "📝 <b>Что дальше?</b>\n\n"
-            "• <b>Перешлите</b> сообщение выше в канал (автор будет скрыт)\n"
-            "• Или используйте кнопки ниже",
-            parse_mode='HTML',
-            reply_markup=keyboard
-        )
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка отправки анонимной версии админу {admin_id}: {e}")
         return False
 
 # === СТАТИСТИКА РАБОТЫ БОТА ===
@@ -564,26 +502,15 @@ def start(message):
 
 @bot.message_handler(commands=['help'])
 def help_command(message):
-    user_id = message.from_user.id
-    is_admin = user_id in ADMIN_IDS
-    
     help_text = """
 🤖 <b>Доступные команды:</b>
 /start - Начать работу
-/help - Показать справку"""
-    
-    # Добавляем команды админов только если пользователь - админ
-    if is_admin:
-        help_text += """
-/stats - Статистика бота
-/status - Статус работы бота  
-/health - Проверка здоровья бота
-/restart - Принудительный перезапуск
-/info - Информация о настройках
-/pending - Ожидающие модерации"""
-    
-    help_text += """
-    
+/help - Показать справку
+/stats - Статистика бота (админы)
+/status - Статус работы бота (админы)
+/health - Проверка здоровья бота (админы)
+/restart - Принудительный перезапуск (админы)
+
 📨 <b>Что можно отправить:</b>
 • Текстовые сообщения
 • Фотографии (с подписью или без)
@@ -741,7 +668,7 @@ def pending_messages(message):
         conn = sqlite3.connect('bot.db', check_same_thread=False)
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM messages WHERE status = 'pending' ORDER BY id DESC LIMIT 10")
+        cursor.execute("SELECT id, user_id, user_name, username, message_text, message_type, file_id, file_type, timestamp, status FROM messages WHERE status = 'pending' ORDER BY id DESC LIMIT 10")
         pending_messages = cursor.fetchall()
         
         if not pending_messages:
@@ -789,7 +716,7 @@ def handle_text(message):
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     user = message.from_user
-    caption = message.caption or ''  # Не добавляем автоматический текст
+    caption = message.caption or '📷 Фото'
     file_id = message.photo[-1].file_id
 
     message_id = save_message_to_db(
@@ -797,7 +724,7 @@ def handle_photo(message):
         user.first_name or 'User',
         user.username or '',
         'photo',
-        caption,  # Сохраняем реальный caption (может быть пустым)
+        caption,
         file_id,
         'photo'
     )
@@ -808,7 +735,7 @@ def handle_photo(message):
 @bot.message_handler(content_types=['video'])
 def handle_video(message):
     user = message.from_user
-    caption = message.caption or ''  # Не добавляем автоматический текст
+    caption = message.caption or '🎥 Видео'
     file_id = message.video.file_id
 
     message_id = save_message_to_db(
@@ -816,7 +743,7 @@ def handle_video(message):
         user.first_name or 'User',
         user.username or '',
         'video',
-        caption,  # Сохраняем реальный caption
+        caption,
         file_id,
         'video'
     )
@@ -828,25 +755,24 @@ def handle_video(message):
 def handle_voice(message):
     user = message.from_user
     file_id = message.voice.file_id
-    caption = '🎤 Голосовое сообщение'  # Оставляем только для голосовых
 
     message_id = save_message_to_db(
         user.id,
         user.first_name or 'User',
         user.username or '',
         'voice',
-        caption,
+        '🎤 Голосовое сообщение',
         file_id,
         'voice'
     )
 
     bot.send_message(message.chat.id, "✅ Голосовое сообщение отправлено")
-    notify_admins(message_id, user, caption, 'voice', file_id, message.message_id)
+    notify_admins(message_id, user, '🎤 Голосовое сообщение', 'voice', file_id, message.message_id)
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
     user = message.from_user
-    caption = message.caption or ''  # Не добавляем автоматический текст
+    caption = message.caption or '📄 Документ'
     file_id = message.document.file_id
 
     message_id = save_message_to_db(
@@ -854,7 +780,7 @@ def handle_document(message):
         user.first_name or 'User',
         user.username or '',
         'document',
-        caption,  # Сохраняем реальный caption
+        caption,
         file_id,
         'document'
     )
@@ -887,25 +813,19 @@ def notify_admins(message_id, user, text, media_type, file_id=None, original_mes
     icons = {'text': '📝', 'photo': '📷', 'video': '🎥', 'voice': '🎤', 'document': '📄', 'sticker': '🎭'}
     icon = icons.get(media_type, '📨')
     username_display = f"@{user.username}" if user.username else "нет юзернейма"
-    
-    # Показываем реальный текст или тип контента
-    display_text = text if text else f"{icon} {media_type}"
 
     admin_msg = f"""{icon} <b>Новое сообщение</b> #{message_id}
 
 👤 <b>От:</b> {user.first_name} ({username_display})
 🆔 <b>ID:</b> {user.id}
-📋 <b>Тип:</b> {media_type}"""
-    
-    # Добавляем текст только если он есть
-    if text:
-        admin_msg += f"\n📝 <b>Текст:</b> {text}"
+📋 <b>Тип:</b> {media_type}
+📝 <b>Текст:</b> {text if text else 'Нет текста'}"""
 
     from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
     for admin_id in ADMIN_IDS:
         try:
-            # Отправка превью контента
+            # Сначала отправляем превью контента
             if media_type == 'photo' and file_id:
                 msg = bot.send_photo(admin_id, file_id, caption=admin_msg, parse_mode='HTML')
             elif media_type == 'video' and file_id:
@@ -915,27 +835,36 @@ def notify_admins(message_id, user, text, media_type, file_id=None, original_mes
             elif media_type == 'document' and file_id:
                 msg = bot.send_document(admin_id, file_id, caption=admin_msg, parse_mode='HTML')
             elif media_type == 'sticker' and file_id:
+                # Для стикеров сначала отправляем описание, потом стикер
                 bot.send_message(admin_id, admin_msg, parse_mode='HTML')
                 sent_sticker = bot.send_sticker(admin_id, file_id)
                 msg = sent_sticker
             else:
+                # Для текста отправляем просто сообщение
                 msg = bot.send_message(admin_id, admin_msg, parse_mode='HTML')
             
-            # Кнопки
+            # Добавляем кнопки выбора типа публикации
             keyboard = InlineKeyboardMarkup()
             keyboard.row(
-                InlineKeyboardButton("📝 Опубликовать", callback_data=f"publish_normal_{message_id}"),
-                InlineKeyboardButton("🔄 Анонимная версия", callback_data=f"send_anonymous_{message_id}")
+                InlineKeyboardButton("📝 Обычная публикация", callback_data=f"publish_normal_{message_id}"),
+                InlineKeyboardButton("🔄 Переслать", callback_data=f"publish_forward_{message_id}")
             )
             keyboard.row(
-                InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{message_id}"),
+                InlineKeyboardButton("💬 Ответить пользователю", callback_data=f"reply_{message_id}"),
                 InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{message_id}")
             )
             
-            bot.edit_message_reply_markup(admin_id, msg.message_id, reply_markup=keyboard)
+            if media_type != 'sticker':  # Для стикеров не редактируем разметку
+                bot.edit_message_reply_markup(admin_id, msg.message_id, reply_markup=keyboard)
+            else:
+                # Для стикеров отправляем кнопки отдельным сообщением
+                bot.send_message(admin_id, "Выберите действие:", reply_markup=keyboard)
             
         except Exception as e:
             logger.error(f"❌ Ошибка отправки админу {admin_id}: {e}")
+            # Проверяем, если ошибка "chat not found", логируем это отдельно
+            if "chat not found" in str(e):
+                logger.error(f"🚨 Админ {admin_id} не найден! Проверьте правильность ID администратора")
 
 # === ОБРАБОТКА CALLBACK ===
 @bot.callback_query_handler(func=lambda call: True)
@@ -947,17 +876,11 @@ def handle_callback(call):
         return
 
     try:
-        # Обработка обычной публикации
         if call.data.startswith('publish_normal_'):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
-            # Проверяем, найдено ли сообщение в базе
-            if not message_data:
-                bot.answer_callback_query(call.id, f"❌ Сообщение #{message_id} не найдено в базе")
-                return
-                
-            if message_data[9] != 'pending':  # status
+            if message_data and message_data[9] != 'pending':
                 status = message_data[9]
                 status_texts = {
                     'approved': '✅ уже одобрено',
@@ -971,16 +894,16 @@ def handle_callback(call):
             update_publish_type(message_id, 'normal')
             
             success = send_to_channel({
-                'message_type': message_data[5],  # message_type
-                'text': message_data[4],  # message_text
-                'file_id': message_data[6]  # file_id
+                'message_type': message_data[5],
+                'text': message_data[4],
+                'file_id': message_data[6]
             }, 'normal')
 
             conn = sqlite3.connect('bot.db', check_same_thread=False)
             cursor = conn.cursor()
             if success:
                 cursor.execute("UPDATE messages SET status = 'approved' WHERE id = ?", (message_id,))
-                status_text = f"✅ Сообщение #{message_id} опубликовано"
+                status_text = f"✅ Сообщение #{message_id} опубликовано (обычная публикация)"
                 logger.info(f"✅ Сообщение #{message_id} опубликовано")
             else:
                 cursor.execute("UPDATE messages SET status = 'error' WHERE id = ?", (message_id,))
@@ -998,16 +921,11 @@ def handle_callback(call):
             except:
                 bot.send_message(call.message.chat.id, f"{status_text}\n👤 Обработал: {call.from_user.first_name}")
 
-        # Обработка анонимной версии
-        elif call.data.startswith('send_anonymous_'):
+        elif call.data.startswith('publish_forward_'):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
-            if not message_data:
-                bot.answer_callback_query(call.id, f"❌ Сообщение #{message_id} не найдено в базе")
-                return
-                
-            if message_data[9] != 'pending':
+            if message_data and message_data[9] != 'pending':
                 status = message_data[9]
                 status_texts = {
                     'approved': '✅ уже одобрено',
@@ -1017,34 +935,7 @@ def handle_callback(call):
                 bot.answer_callback_query(call.id, f"Сообщение {status_texts.get(status, status)}")
                 return
 
-            # Отправляем админу анонимную версию для ручной пересылки
-            bot.answer_callback_query(call.id, "🔄 Отправляю анонимную версию...")
-            send_anonymous_version(call.from_user.id, {
-                'message_type': message_data[5],
-                'text': message_data[4],
-                'file_id': message_data[6]
-            }, message_id)
-
-        # Автоматическая публикация анонимной версии
-        elif call.data.startswith('auto_forward_'):
-            message_id = int(call.data.split('_')[2])
-            message_data = get_message_from_db(message_id)
-            
-            if not message_data:
-                bot.answer_callback_query(call.id, f"❌ Сообщение #{message_id} не найдено в базе")
-                return
-                
-            if message_data[9] != 'pending':
-                status = message_data[9]
-                status_texts = {
-                    'approved': '✅ уже одобрено',
-                    'rejected': '❌ уже отклонено', 
-                    'error': '⚠️ ошибка публикации'
-                }
-                bot.answer_callback_query(call.id, f"Сообщение {status_texts.get(status, status)}")
-                return
-
-            # Автоматическая публикация анонимной версии
+            # Устанавливаем тип публикации "пересылка"
             update_publish_type(message_id, 'forward')
             
             success = send_to_channel({
@@ -1057,11 +948,11 @@ def handle_callback(call):
             cursor = conn.cursor()
             if success:
                 cursor.execute("UPDATE messages SET status = 'approved' WHERE id = ?", (message_id,))
-                status_text = f"✅ Сообщение #{message_id} опубликовано анонимно"
-                logger.info(f"✅ Сообщение #{message_id} опубликовано анонимно")
+                status_text = f"✅ Сообщение #{message_id} переслано в канал"
+                logger.info(f"✅ Сообщение #{message_id} переслано")
             else:
                 cursor.execute("UPDATE messages SET status = 'error' WHERE id = ?", (message_id,))
-                status_text = f"❌ Сообщение #{message_id} не удалось опубликовать"
+                status_text = f"❌ Сообщение #{message_id} не удалось переслать"
             conn.commit()
             conn.close()
 
@@ -1075,37 +966,12 @@ def handle_callback(call):
             except:
                 bot.send_message(call.message.chat.id, f"{status_text}\n👤 Обработал: {call.from_user.first_name}")
 
-        # Отметка как опубликованного
-        elif call.data.startswith('mark_published_'):
-            message_id = int(call.data.split('_')[2])
-            conn = sqlite3.connect('bot.db', check_same_thread=False)
-            cursor = conn.cursor()
-            cursor.execute("UPDATE messages SET status = 'approved', publish_type = 'forward' WHERE id = ?", (message_id,))
-            conn.commit()
-            conn.close()
-
-            status_text = f"✅ Сообщение #{message_id} отмечено как опубликованное"
-            logger.info(f"✅ Сообщение #{message_id} отмечено как опубликованное")
-
-            bot.answer_callback_query(call.id, "✅ Сообщение отмечено как опубликованное")
-            try:
-                bot.edit_message_text(
-                    f"{status_text}\n👤 Обработал: {call.from_user.first_name}", 
-                    call.message.chat.id, 
-                    call.message.message_id,
-                    reply_markup=None
-                )
-            except:
-                pass
-
-        # Ответ пользователю
         elif call.data.startswith('reply_'):
             message_id = int(call.data.split('_')[1])
             # Сохраняем ID сообщения для ответа
             bot.answer_callback_query(call.id, "💬 Введите ответ пользователю")
             bot.send_message(call.message.chat.id, f"💬 Введите ответ для сообщения #{message_id}:")
 
-        # Отклонение сообщения
         elif call.data.startswith('reject_'):
             message_id = int(call.data.split('_')[1])
             conn = sqlite3.connect('bot.db', check_same_thread=False)
@@ -1181,6 +1047,7 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
 
 
