@@ -372,55 +372,54 @@ def log_error_to_db(error_type, error_message):
     conn.close()
 
 # === ОТПРАВКА СООБЩЕНИЙ ===
-def send_to_channel(message_data, publish_type='normal'):
+def send_to_channel(message_data, publish_type='normal', admin_id=None):
     try:
         message_type = message_data.get('message_type')
         text = message_data.get('text', '')
         file_id = message_data.get('file_id')
 
-        if publish_type == 'forward':
-            # Пересылаем сообщение без указания автора (копируем контент)
-            if message_type == 'text':
-                bot.send_message(CHANNEL_USERNAME, text, parse_mode='HTML')
-                return True
-            elif message_type == 'photo':
-                bot.send_photo(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                return True
-            elif message_type == 'video':
-                bot.send_video(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                return True
-            elif message_type == 'voice':
-                bot.send_voice(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                return True
-            elif message_type == 'document':
-                bot.send_document(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                return True
-            elif message_type == 'sticker':
-                bot.send_sticker(CHANNEL_USERNAME, file_id)
-                return True
+        if publish_type == 'forward' and admin_id:
+            # Отправляем контент АДМИНУ для ручного пересывания
+            target_chat = admin_id
+            forward_text = "🔄 <b>Перешлите это сообщение в канал:</b>"
         else:
-            # Обычная публикация
-            if message_type == 'text':
-                bot.send_message(CHANNEL_USERNAME, text, parse_mode='HTML')
-                return True
-            elif message_type == 'photo':
-                bot.send_photo(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                return True
-            elif message_type == 'video':
-                bot.send_video(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                return True
-            elif message_type == 'voice':
-                bot.send_voice(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                return True
-            elif message_type == 'document':
-                bot.send_document(CHANNEL_USERNAME, file_id, caption=text, parse_mode='HTML')
-                return True
-            elif message_type == 'sticker':
-                bot.send_sticker(CHANNEL_USERNAME, file_id)
-                return True
-            else:
-                logger.error(f"❌ Неподдерживаемый тип: {message_type}")
-                return False
+            # Обычная публикация - отправляем в канал анонимно
+            target_chat = CHANNEL_USERNAME
+            forward_text = ""
+
+        if message_type == 'text':
+            if forward_text:
+                bot.send_message(target_chat, forward_text, parse_mode='HTML')
+            bot.send_message(target_chat, text, parse_mode='HTML')
+            return True
+        elif message_type == 'photo':
+            if forward_text:
+                bot.send_message(target_chat, forward_text, parse_mode='HTML')
+            bot.send_photo(target_chat, file_id, caption=text, parse_mode='HTML')
+            return True
+        elif message_type == 'video':
+            if forward_text:
+                bot.send_message(target_chat, forward_text, parse_mode='HTML')
+            bot.send_video(target_chat, file_id, caption=text, parse_mode='HTML')
+            return True
+        elif message_type == 'voice':
+            if forward_text:
+                bot.send_message(target_chat, forward_text, parse_mode='HTML')
+            bot.send_voice(target_chat, file_id, caption=text, parse_mode='HTML')
+            return True
+        elif message_type == 'document':
+            if forward_text:
+                bot.send_message(target_chat, forward_text, parse_mode='HTML')
+            bot.send_document(target_chat, file_id, caption=text, parse_mode='HTML')
+            return True
+        elif message_type == 'sticker':
+            if forward_text:
+                bot.send_message(target_chat, forward_text, parse_mode='HTML')
+            bot.send_sticker(target_chat, file_id)
+            return True
+        else:
+            logger.error(f"❌ Неподдерживаемый тип: {message_type}")
+            return False
 
     except Exception as e:
         logger.error(f"❌ Ошибка отправки в канал: {e}")
@@ -1179,17 +1178,17 @@ def handle_callback(call):
                 'message_type': message_data[5],  # 6-я колонка - message_type
                 'text': message_data[4],         # 5-я колонка - message_text
                 'file_id': message_data[6]       # 7-я колонка - file_id
-            }, 'forward')
+            }, 'forward', call.from_user.id)
 
             conn = sqlite3.connect('bot.db', check_same_thread=False)
             cursor = conn.cursor()
             if success:
                 cursor.execute("UPDATE messages SET status = 'approved' WHERE id = ?", (message_id,))
-                status_text = f"✅ Сообщение #{message_id} переслано в канал"
-                logger.info(f"✅ Сообщение #{message_id} переслано")
+                status_text = f"✅ Сообщение #{message_id} отправлено для пересылки"
+                logger.info(f"✅ Сообщение #{message_id} отправлено для пересылки")
             else:
                 cursor.execute("UPDATE messages SET status = 'error' WHERE id = ?", (message_id,))
-                status_text = f"❌ Сообщение #{message_id} не удалось переслать"
+                status_text = f"❌ Сообщение #{message_id} не удалось отправить для пересылки"
             conn.commit()
             conn.close()
 
@@ -1301,5 +1300,6 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
 
