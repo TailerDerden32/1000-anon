@@ -37,7 +37,7 @@ if not config:
 📋 Создайте файл config.json в файловом менеджере Bothost с содержимым:
 
 {
-    "BOT_TOKEN": "4231587678:AFDWV-ThtnVHv55hNdKL-Fie8BDAm1PfVEE",
+    "BOT_TOKEN": "8582587678:AAEWV-ThtnVHv55hNdKL-Fie8BDAm1PfVEE",
     "ADMIN_IDS": [6729929161],
     "CHANNEL_USERNAME": "@your_channel_username"
 }
@@ -710,6 +710,7 @@ def pending_messages(message):
         conn = sqlite3.connect('bot.db', check_same_thread=False)
         cursor = conn.cursor()
         
+        # ИСПРАВЛЕНИЕ: выбираем только 10 нужных колонок вместо всех
         cursor.execute("SELECT id, user_id, user_name, username, message_text, message_type, file_id, file_type, timestamp, status FROM messages WHERE status = 'pending' ORDER BY id DESC LIMIT 10")
         pending_messages = cursor.fetchall()
         
@@ -720,6 +721,7 @@ def pending_messages(message):
         response = "📋 <b>Сообщения ожидающие модерации:</b>\n\n"
         
         for msg in pending_messages:
+            # ИСПРАВЛЕНИЕ: распаковываем только 10 значений
             msg_id, user_id, user_name, username, text, msg_type, file_id, file_type, timestamp, status = msg
             response += f"#{msg_id} - {user_name} - {msg_type}\n"
             if text and len(text) > 50:
@@ -922,6 +924,8 @@ def handle_callback(call):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
+            # ИСПРАВЛЕНИЕ: правильные индексы колонок
+            # message_data[9] - статус (10-я колонка)
             if message_data and message_data[9] != 'pending':
                 status = message_data[9]
                 status_texts = {
@@ -936,9 +940,9 @@ def handle_callback(call):
             update_publish_type(message_id, 'normal')
             
             success = send_to_channel({
-                'message_type': message_data[5],
-                'text': message_data[4],
-                'file_id': message_data[6]
+                'message_type': message_data[5],  # 6-я колонка - message_type
+                'text': message_data[4],         # 5-я колонка - message_text
+                'file_id': message_data[6]       # 7-я колонка - file_id
             }, 'normal')
 
             conn = sqlite3.connect('bot.db', check_same_thread=False)
@@ -967,6 +971,7 @@ def handle_callback(call):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
+            # ИСПРАВЛЕНИЕ: правильные индексы колонок
             if message_data and message_data[9] != 'pending':
                 status = message_data[9]
                 status_texts = {
@@ -981,9 +986,9 @@ def handle_callback(call):
             update_publish_type(message_id, 'forward')
             
             success = send_to_channel({
-                'message_type': message_data[5],
-                'text': message_data[4],
-                'file_id': message_data[6]
+                'message_type': message_data[5],  # 6-я колонка - message_type
+                'text': message_data[4],         # 5-я колонка - message_text
+                'file_id': message_data[6]       # 7-я колонка - file_id
             }, 'forward')
 
             conn = sqlite3.connect('bot.db', check_same_thread=False)
@@ -1089,16 +1094,4 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
-
-
-
-
-
-
-
-
-
-
-
-
 
