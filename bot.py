@@ -37,7 +37,7 @@ if not config:
 📋 Создайте файл config.json в файловом менеджере Bothost с содержимым:
 
 {
-    "BOT_TOKEN": "8582587678:AAEWV-ThtnVHv55hNdKL-Fie8BDAm1PfVEE",
+    "BOT_TOKEN": "4231587678:AFDWV-ThtnVHv55hNdKL-Fie8BDAm1PfVEE",
     "ADMIN_IDS": [6729929161],
     "CHANNEL_USERNAME": "@your_channel_username"
 }
@@ -1089,6 +1089,7 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
 
 
