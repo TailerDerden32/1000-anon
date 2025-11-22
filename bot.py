@@ -20,9 +20,14 @@ def load_config():
         print("✅ Конфигурация загружена из config.json")
         return config
     except FileNotFoundError:
-        print("❌ Файл config.json не найден!")
-        print("📝 Создайте файл config.json через файловый менеджер Bothost")
-        return None
+        print("❌ Файл config.json не найден! Использую переменные окружения")
+        # Пробуем загрузить из переменных окружения
+        config = {
+            'BOT_TOKEN': os.environ.get('BOT_TOKEN'),
+            'ADMIN_IDS': [int(x.strip()) for x in os.environ.get('ADMIN_IDS', '').split(',') if x.strip()],
+            'CHANNEL_USERNAME': os.environ.get('CHANNEL_USERNAME')
+        }
+        return config
     except json.JSONDecodeError as e:
         print(f"❌ Ошибка в формате config.json: {e}")
         return None
@@ -33,15 +38,7 @@ def load_config():
 # Загружаем конфигурацию
 config = load_config()
 if not config:
-    print("""
-📋 Создайте файл config.json в файловом менеджере Bothost с содержимым:
-
-{
-    "BOT_TOKEN": "8582587678:AAEWV-ThtnVHv55hNdKL-Fie8BDAm1PfVEE",
-    "ADMIN_IDS": [6729929161],
-    "CHANNEL_USERNAME": "@your_channel_username"
-}
-""")
+    print("❌ Не удалось загрузить конфигурацию")
     exit(1)
 
 # === НАСТРОЙКИ ===
@@ -51,15 +48,15 @@ CHANNEL_USERNAME = config.get('CHANNEL_USERNAME')
 
 # Проверяем что все переменные загружены
 if not BOT_TOKEN:
-    print("❌ BOT_TOKEN не найден в config.json")
+    print("❌ BOT_TOKEN не найден")
     exit(1)
 
 if not ADMIN_IDS:
-    print("❌ ADMIN_IDS не найден в config.json")
+    print("❌ ADMIN_IDS не найден")
     exit(1)
 
 if not CHANNEL_USERNAME:
-    print("❌ CHANNEL_USERNAME не найден в config.json")
+    print("❌ CHANNEL_USERNAME не найден")
     exit(1)
 
 print(f"✅ BOT_TOKEN: {BOT_TOKEN[:10]}...")
@@ -99,7 +96,7 @@ try:
     logger.info(f"✅ Бот запущен: {bot_info.first_name} (@{bot_info.username})")
 except Exception as e:
     logger.error(f"❌ Ошибка доступа к боту: {e}")
-    logger.error("⚠️ Проверьте правильность BOT_TOKEN в config.json")
+    logger.error("⚠️ Проверьте правильность BOT_TOKEN")
     exit(1)
 
 # Проверка канала
@@ -108,7 +105,7 @@ try:
     logger.info(f"✅ Канал найден: {chat.title}")
 except Exception as e:
     logger.error(f"❌ Ошибка доступа к каналу {CHANNEL_USERNAME}: {e}")
-    logger.error("⚠️ Проверьте: 1) Юзернейм канала в config.json 2) Бот добавлен как администратор")
+    logger.error("⚠️ Проверьте: 1) Юзернейм канала 2) Бот добавлен как администратор")
 # =================
 
 # === СИСТЕМА МОНИТОРИНГА ЗДОРОВЬЯ ===
@@ -531,6 +528,106 @@ def get_health_status():
     
     return health_checks
 
+# === НОВАЯ ФУНКЦИЯ: ПОСЛЕДНИЕ ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЕЙ ===
+def get_recent_user_activity(limit=20):
+    """Возвращает последние действия пользователей"""
+    conn = sqlite3.connect('bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT user_id, user_name, username, message_type, status, timestamp, COUNT(*) as activity_count
+        FROM messages 
+        WHERE timestamp >= datetime('now', '-7 days')
+        GROUP BY user_id, message_type, status
+        ORDER BY timestamp DESC
+        LIMIT ?
+    ''', (limit,))
+    
+    activities = cursor.fetchall()
+    conn.close()
+    
+    return activities
+
+def get_user_activity_stats():
+    """Возвращает статистику активности пользователей за последние 7 дней"""
+    conn = sqlite3.connect('bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT 
+            user_id,
+            user_name,
+            username,
+            COUNT(*) as total_messages,
+            SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
+            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+            SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
+            MAX(timestamp) as last_activity
+        FROM messages 
+        WHERE timestamp >= datetime('now', '-7 days')
+        GROUP BY user_id
+        ORDER BY total_messages DESC
+        LIMIT 50
+    ''')
+    
+    stats = cursor.fetchall()
+    conn.close()
+    
+    return stats
+
+# === ОБРАБОТКА ОТВЕТОВ АДМИНОВ ПОЛЬЗОВАТЕЛЯМ ===
+user_reply_mode = {}  # Словарь для отслеживания режима ответа: {admin_id: message_id}
+
+@bot.message_handler(func=lambda message: message.from_user.id in ADMIN_IDS and message.text and not message.text.startswith('/'))
+def handle_admin_reply(message):
+    """Обрабатывает ответы админов пользователям"""
+    admin_id = message.from_user.id
+    
+    # Проверяем, находится ли админ в режиме ответа
+    if admin_id in user_reply_mode:
+        target_message_id = user_reply_mode[admin_id]
+        
+        try:
+            # Получаем информацию о сообщении из базы данных
+            conn = sqlite3.connect('bot.db', check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id, user_name, message_text FROM messages WHERE id = ?", (target_message_id,))
+            message_data = cursor.fetchone()
+            
+            if message_data:
+                user_id, user_name, original_text = message_data
+                
+                # Отправляем ответ пользователю (БЕЗ данных админа)
+                try:
+                    reply_text = f"💬 <b>Ответ от администратора:</b>\n\n{message.text}"
+                    bot.send_message(user_id, reply_text, parse_mode='HTML')
+                    
+                    # Сохраняем ответ в базу данных
+                    update_admin_reply(target_message_id, message.text, True)
+                    
+                    # Уведомляем админа об успешной отправке
+                    bot.send_message(admin_id, f"✅ Ответ отправлен пользователю {user_name}")
+                    logger.info(f"💬 Ответ админа {admin_id} отправлен пользователю {user_id}")
+                    
+                except Exception as e:
+                    error_msg = f"❌ Не удалось отправить ответ пользователю: {e}"
+                    bot.send_message(admin_id, error_msg)
+                    logger.error(f"❌ Ошибка отправки ответа пользователю: {e}")
+            
+            else:
+                bot.send_message(admin_id, "❌ Сообщение не найдено в базе данных")
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки ответа админа: {e}")
+            bot.send_message(admin_id, "❌ Ошибка при обработке ответа")
+        
+        # Выходим из режима ответа
+        del user_reply_mode[admin_id]
+        
+    else:
+        # Если админ не в режиме ответа, обрабатываем как обычное сообщение
+        handle_text(message)
+
 # === ОБРАБОТЧИКИ КОМАНД ===
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -552,6 +649,8 @@ def help_command(message):
 /status - Статус работы бота (админы)
 /health - Проверка здоровья бота (админы)
 /restart - Принудительный перезапуск (админы)
+/activity - Активность пользователей (админы)
+/users - Статистика пользователей (админы)
 
 📨 <b>Что можно отправить:</b>
 • Текстовые сообщения
@@ -701,6 +800,92 @@ def info_command(message):
 """
     bot.send_message(message.chat.id, info_text, parse_mode='HTML')
 
+# === НОВАЯ КОМАНДА: АКТИВНОСТЬ ПОЛЬЗОВАТЕЛЕЙ ===
+@bot.message_handler(commands=['activity'])
+def activity_command(message):
+    """Показывает последние действия пользователей"""
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    try:
+        activities = get_recent_user_activity(15)
+        
+        if not activities:
+            bot.send_message(message.chat.id, "📊 За последние 7 дней активностей не найдено")
+            return
+        
+        response = "📊 <b>Последние действия пользователей (7 дней):</b>\n\n"
+        
+        for activity in activities:
+            user_id, user_name, username, msg_type, status, timestamp, count = activity
+            username_display = f"@{username}" if username else "нет юзернейма"
+            
+            # Иконки для типов сообщений
+            type_icons = {
+                'text': '📝',
+                'photo': '📷', 
+                'video': '🎥',
+                'voice': '🎤',
+                'document': '📄',
+                'sticker': '🎭'
+            }
+            icon = type_icons.get(msg_type, '📨')
+            
+            # Статусы
+            status_icons = {
+                'approved': '✅',
+                'pending': '⏳',
+                'rejected': '❌'
+            }
+            status_icon = status_icons.get(status, '📋')
+            
+            response += f"{icon} {user_name} ({username_display})\n"
+            response += f"   🆔: {user_id}\n"
+            response += f"   {status_icon} {msg_type}: {count} сообщ.\n"
+            response += f"   🕒 Последнее: {timestamp[:16]}\n"
+            response += "━━━━━━━━━━━━━━━━━━━━\n"
+        
+        bot.send_message(message.chat.id, response, parse_mode='HTML')
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения активности: {e}")
+        bot.send_message(message.chat.id, "❌ Ошибка при получении активности")
+
+# === НОВАЯ КОМАНДА: СТАТИСТИКА ПОЛЬЗОВАТЕЛЕЙ ===
+@bot.message_handler(commands=['users'])
+def users_command(message):
+    """Показывает статистику пользователей"""
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    try:
+        user_stats = get_user_activity_stats()
+        
+        if not user_stats:
+            bot.send_message(message.chat.id, "👥 Нет данных о пользователях за последние 7 дней")
+            return
+        
+        response = "👥 <b>Статистика пользователей (7 дней):</b>\n\n"
+        
+        for i, stat in enumerate(user_stats[:10], 1):  # Показываем топ-10
+            user_id, user_name, username, total, approved, pending, rejected, last_activity = stat
+            username_display = f"@{username}" if username else "нет юзернейма"
+            
+            response += f"{i}. {user_name} ({username_display})\n"
+            response += f"   🆔: {user_id}\n"
+            response += f"   📨 Всего: {total} | ✅ {approved} | ⏳ {pending} | ❌ {rejected}\n"
+            response += f"   🕒 Последняя активность: {last_activity[:16]}\n"
+            response += "━━━━━━━━━━━━━━━━━━━━\n"
+        
+        if len(user_stats) > 10:
+            response += f"\n📈 ... и еще {len(user_stats) - 10} пользователей"
+        
+        bot.send_message(message.chat.id, response, parse_mode='HTML')
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения статистики пользователей: {e}")
+        bot.send_message(message.chat.id, "❌ Ошибка при получении статистики пользователей")
+
 @bot.message_handler(commands=['pending'])
 def pending_messages(message):
     if message.from_user.id not in ADMIN_IDS:
@@ -744,6 +929,11 @@ def handle_text(message):
         return
 
     user = message.from_user
+    
+    # Если админ в режиме ответа, пропускаем обычную обработку
+    if user.id in ADMIN_IDS and user.id in user_reply_mode:
+        return
+    
     logger.info(f"📝 Текст от {user.first_name} (ID: {user.id})")
 
     message_id = save_message_to_db(
@@ -1015,9 +1205,26 @@ def handle_callback(call):
 
         elif call.data.startswith('reply_'):
             message_id = int(call.data.split('_')[1])
+            
             # Сохраняем ID сообщения для ответа
+            user_reply_mode[call.from_user.id] = message_id
+            
+            # Получаем информацию о сообщении для контекста
+            message_data = get_message_from_db(message_id)
+            if message_data:
+                user_name = message_data[2]  # user_name
+                message_text = message_data[4]  # message_text
+                
+                context_text = f"💬 <b>Ответ на сообщение #{message_id}</b>\n\n"
+                context_text += f"👤 <b>Пользователь:</b> {user_name}\n"
+                context_text += f"📝 <b>Сообщение:</b> {message_text[:100]}{'...' if len(message_text) > 100 else ''}\n\n"
+                context_text += "✍️ <b>Введите ваш ответ:</b>"
+                
+                bot.send_message(call.message.chat.id, context_text, parse_mode='HTML')
+            else:
+                bot.send_message(call.message.chat.id, f"💬 Введите ответ для сообщения #{message_id}:")
+            
             bot.answer_callback_query(call.id, "💬 Введите ответ пользователю")
-            bot.send_message(call.message.chat.id, f"💬 Введите ответ для сообщения #{message_id}:")
 
         elif call.data.startswith('reject_'):
             message_id = int(call.data.split('_')[1])
@@ -1094,4 +1301,5 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
