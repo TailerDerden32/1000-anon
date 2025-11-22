@@ -10,43 +10,60 @@ import threading
 import time
 import sys
 
-# === ФУНКЦИЯ ДЛЯ БЕЗОПАСНОГО ПОЛУЧЕНИЯ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ===
-def get_env_var(var_name, default=None):
-    """Безопасное получение переменных окружения"""
-    # Сначала пробуем стандартный способ
-    value = os.environ.get(var_name)
+# === ПРОСТАЯ И ПРЯМАЯ ЗАГРУЗКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ===
+def load_config():
+    """Загружает конфигурацию из переменных окружения"""
+    print("🔍 Загрузка переменных окружения...")
     
-    # Если не нашли, пробуем через getenv
-    if value is None:
-        value = os.getenv(var_name)
+    # Выводим все переменные для отладки
+    for key in ['BOT_TOKEN', 'ADMIN_IDS', 'CHANNEL_USERNAME']:
+        value = os.environ.get(key)
+        print(f"   {key}: {value}")
     
-    # Если все еще None и есть значение по умолчанию
-    if value is None and default is not None:
-        return default
+    # Получаем переменные напрямую
+    BOT_TOKEN = os.environ.get('BOT_TOKEN')
+    ADMIN_IDS_STR = os.environ.get('ADMIN_IDS', '')
+    CHANNEL_USERNAME = os.environ.get('CHANNEL_USERNAME')
+    
+    # Проверяем обязательные переменные
+    if not BOT_TOKEN:
+        print("❌ КРИТИЧЕСКАЯ ОШИБКА: BOT_TOKEN не найден!")
+        return None
+    
+    if not ADMIN_IDS_STR:
+        print("❌ КРИТИЧЕСКАЯ ОШИБКА: ADMIN_IDS не найден!")
+        return None
         
-    return value
+    if not CHANNEL_USERNAME:
+        print("❌ КРИТИЧЕСКАЯ ОШИБКА: CHANNEL_USERNAME не найден!")
+        return None
+    
+    # Парсим ADMIN_IDS
+    try:
+        ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_STR.split(',') if x.strip()]
+    except ValueError as e:
+        print(f"❌ Ошибка парсинга ADMIN_IDS: {e}")
+        return None
+    
+    print("✅ Все переменные окружения загружены успешно!")
+    return {
+        'BOT_TOKEN': BOT_TOKEN,
+        'ADMIN_IDS': ADMIN_IDS,
+        'CHANNEL_USERNAME': CHANNEL_USERNAME
+    }
+
+# Загружаем конфигурацию
+config = load_config()
+if not config:
+    print("🚨 Не удалось загрузить конфигурацию. Завершение работы.")
+    exit(1)
 
 # === НАСТРОЙКИ ===
-# Получаем переменные
-BOT_TOKEN = get_env_var('BOT_TOKEN')
-ADMIN_IDS = [int(x.strip()) for x in get_env_var('ADMIN_IDS', '').split(',') if x.strip()]
-CHANNEL_USERNAME = get_env_var('CHANNEL_USERNAME')
+BOT_TOKEN = config['BOT_TOKEN']
+ADMIN_IDS = config['ADMIN_IDS']
+CHANNEL_USERNAME = config['CHANNEL_USERNAME']
 
-# Если переменные не найдены, выводим ошибку
-if not BOT_TOKEN:
-    print("❌ BOT_TOKEN не найден в переменных окружения")
-    print("🔍 Доступные переменные:", list(os.environ.keys()))
-    exit(1)
-
-if not ADMIN_IDS:
-    print("❌ ADMIN_IDS не найден или пустой")
-    exit(1)
-
-if not CHANNEL_USERNAME:
-    print("❌ CHANNEL_USERNAME не найден")
-    exit(1)
-
-print(f"✅ BOT_TOKEN: {BOT_TOKEN[:10]}...")  # Показываем только начало токена
+print(f"✅ BOT_TOKEN: {BOT_TOKEN[:10]}...")
 print(f"✅ ADMIN_IDS: {ADMIN_IDS}")
 print(f"✅ CHANNEL_USERNAME: {CHANNEL_USERNAME}")
 
@@ -94,6 +111,7 @@ except Exception as e:
     logger.error(f"❌ Ошибка доступа к каналу {CHANNEL_USERNAME}: {e}")
     logger.error("⚠️ Проверьте: 1) Юзернейм канала 2) Бот добавлен как администратор")
 # =================
+
 
 # === СИСТЕМА МОНИТОРИНГА ЗДОРОВЬЯ ===
 def log_error(error_type, error_message):
