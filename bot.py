@@ -10,10 +10,45 @@ import threading
 import time
 import sys
 
+# === ФУНКЦИЯ ДЛЯ БЕЗОПАСНОГО ПОЛУЧЕНИЯ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ===
+def get_env_var(var_name, default=None):
+    """Безопасное получение переменных окружения"""
+    # Сначала пробуем стандартный способ
+    value = os.environ.get(var_name)
+    
+    # Если не нашли, пробуем через getenv
+    if value is None:
+        value = os.getenv(var_name)
+    
+    # Если все еще None и есть значение по умолчанию
+    if value is None and default is not None:
+        return default
+        
+    return value
+
 # === НАСТРОЙКИ ===
-BOT_TOKEN = os.environ['BOT_TOKEN']
-ADMIN_IDS = [int(x.strip()) for x in os.environ['ADMIN_IDS'].split(',')]
-CHANNEL_USERNAME = os.environ['CHANNEL_USERNAME']
+# Получаем переменные
+BOT_TOKEN = get_env_var('BOT_TOKEN')
+ADMIN_IDS = [int(x.strip()) for x in get_env_var('ADMIN_IDS', '').split(',') if x.strip()]
+CHANNEL_USERNAME = get_env_var('CHANNEL_USERNAME')
+
+# Если переменные не найдены, выводим ошибку
+if not BOT_TOKEN:
+    print("❌ BOT_TOKEN не найден в переменных окружения")
+    print("🔍 Доступные переменные:", list(os.environ.keys()))
+    exit(1)
+
+if not ADMIN_IDS:
+    print("❌ ADMIN_IDS не найден или пустой")
+    exit(1)
+
+if not CHANNEL_USERNAME:
+    print("❌ CHANNEL_USERNAME не найден")
+    exit(1)
+
+print(f"✅ BOT_TOKEN: {BOT_TOKEN[:10]}...")  # Показываем только начало токена
+print(f"✅ ADMIN_IDS: {ADMIN_IDS}")
+print(f"✅ CHANNEL_USERNAME: {CHANNEL_USERNAME}")
 
 # Настройки мониторинга
 HEALTH_CHECK_INTERVAL = 300  # 5 минут
@@ -27,15 +62,6 @@ LAST_RESTART_TIME = datetime.now()
 ERROR_COUNT = 0
 LAST_ERROR_TIME = None
 HEALTH_MONITOR_RUNNING = False
-
-# Проверяем переменные окружения
-required_vars = ['BOT_TOKEN', 'ADMIN_IDS', 'CHANNEL_USERNAME']
-missing_vars = [var for var in required_vars if not os.environ.get(var)]
-
-if missing_vars:
-    print(f"❌ Отсутствуют переменные окружения: {', '.join(missing_vars)}")
-    print("⚠️ Установите их в настройках bothost")
-    exit(1)
 
 # Настройка логирования
 logging.basicConfig(
@@ -1047,6 +1073,7 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
 
 
