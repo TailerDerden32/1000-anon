@@ -1113,9 +1113,14 @@ def handle_callback(call):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
+            # ПРОВЕРКА: если сообщение не найдено
+            if not message_data:
+                bot.answer_callback_query(call.id, "❌ Сообщение не найдено")
+                return
+                
             # ИСПРАВЛЕНИЕ: правильные индексы колонок
             # message_data[9] - статус (10-я колонка)
-            if message_data and message_data[9] != 'pending':
+            if message_data[9] != 'pending':
                 status = message_data[9]
                 status_texts = {
                     'approved': '✅ уже одобрено',
@@ -1160,8 +1165,13 @@ def handle_callback(call):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
+            # ПРОВЕРКА: если сообщение не найдено
+            if not message_data:
+                bot.answer_callback_query(call.id, "❌ Сообщение не найдено")
+                return
+                
             # ИСПРАВЛЕНИЕ: правильные индексы колонок
-            if message_data and message_data[9] != 'pending':
+            if message_data[9] != 'pending':
                 status = message_data[9]
                 status_texts = {
                     'approved': '✅ уже одобрено',
@@ -1204,25 +1214,26 @@ def handle_callback(call):
 
         elif call.data.startswith('reply_'):
             message_id = int(call.data.split('_')[1])
+            message_data = get_message_from_db(message_id)
+            
+            # ПРОВЕРКА: если сообщение не найдено
+            if not message_data:
+                bot.answer_callback_query(call.id, "❌ Сообщение не найдено")
+                return
             
             # Сохраняем ID сообщения для ответа
             user_reply_mode[call.from_user.id] = message_id
             
             # Получаем информацию о сообщении для контекста
-            message_data = get_message_from_db(message_id)
-            if message_data:
-                user_name = message_data[2]  # user_name
-                message_text = message_data[4]  # message_text
-                
-                context_text = f"💬 <b>Ответ на сообщение #{message_id}</b>\n\n"
-                context_text += f"👤 <b>Пользователь:</b> {user_name}\n"
-                context_text += f"📝 <b>Сообщение:</b> {message_text[:100]}{'...' if len(message_text) > 100 else ''}\n\n"
-                context_text += "✍️ <b>Введите ваш ответ:</b>"
-                
-                bot.send_message(call.message.chat.id, context_text, parse_mode='HTML')
-            else:
-                bot.send_message(call.message.chat.id, f"💬 Введите ответ для сообщения #{message_id}:")
+            user_name = message_data[2]  # user_name
+            message_text = message_data[4]  # message_text
             
+            context_text = f"💬 <b>Ответ на сообщение #{message_id}</b>\n\n"
+            context_text += f"👤 <b>Пользователь:</b> {user_name}\n"
+            context_text += f"📝 <b>Сообщение:</b> {message_text[:100]}{'...' if len(message_text) > 100 else ''}\n\n"
+            context_text += "✍️ <b>Введите ваш ответ:</b>"
+            
+            bot.send_message(call.message.chat.id, context_text, parse_mode='HTML')
             bot.answer_callback_query(call.id, "💬 Введите ответ пользователю")
 
         elif call.data.startswith('reject_'):
@@ -1300,6 +1311,7 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
 
 
