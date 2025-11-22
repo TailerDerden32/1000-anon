@@ -10,58 +10,57 @@ import threading
 import time
 import sys
 
-# === ПРОСТАЯ И ПРЯМАЯ ЗАГРУЗКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ===
+# === ЗАГРУЗКА КОНФИГУРАЦИИ ИЗ JSON ФАЙЛА ===
 def load_config():
-    """Загружает конфигурацию из переменных окружения"""
-    print("🔍 Загрузка переменных окружения...")
-    
-    # Выводим все переменные для отладки
-    for key in ['BOT_TOKEN', 'ADMIN_IDS', 'CHANNEL_USERNAME']:
-        value = os.environ.get(key)
-        print(f"   {key}: {value}")
-    
-    # Получаем переменные напрямую
-    BOT_TOKEN = os.environ.get('BOT_TOKEN')
-    ADMIN_IDS_STR = os.environ.get('ADMIN_IDS', '')
-    CHANNEL_USERNAME = os.environ.get('CHANNEL_USERNAME')
-    
-    # Проверяем обязательные переменные
-    if not BOT_TOKEN:
-        print("❌ КРИТИЧЕСКАЯ ОШИБКА: BOT_TOKEN не найден!")
-        return None
-    
-    if not ADMIN_IDS_STR:
-        print("❌ КРИТИЧЕСКАЯ ОШИБКА: ADMIN_IDS не найден!")
-        return None
-        
-    if not CHANNEL_USERNAME:
-        print("❌ КРИТИЧЕСКАЯ ОШИБКА: CHANNEL_USERNAME не найден!")
-        return None
-    
-    # Парсим ADMIN_IDS
+    """Загружает конфигурацию из config.json"""
     try:
-        ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_STR.split(',') if x.strip()]
-    except ValueError as e:
-        print(f"❌ Ошибка парсинга ADMIN_IDS: {e}")
+        with open('config.json', 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        print("✅ Конфигурация загружена из config.json")
+        return config
+    except FileNotFoundError:
+        print("❌ Файл config.json не найден!")
+        print("📝 Создайте файл config.json через файловый менеджер Bothost")
         return None
-    
-    print("✅ Все переменные окружения загружены успешно!")
-    return {
-        'BOT_TOKEN': BOT_TOKEN,
-        'ADMIN_IDS': ADMIN_IDS,
-        'CHANNEL_USERNAME': CHANNEL_USERNAME
-    }
+    except json.JSONDecodeError as e:
+        print(f"❌ Ошибка в формате config.json: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Ошибка загрузки config.json: {e}")
+        return None
 
 # Загружаем конфигурацию
 config = load_config()
 if not config:
-    print("🚨 Не удалось загрузить конфигурацию. Завершение работы.")
+    print("""
+📋 Создайте файл config.json в файловом менеджере Bothost с содержимым:
+
+{
+    "BOT_TOKEN": "8582587678:AAEWV-ThtnVHv55hNdKL-Fie8BDAm1PfVEE",
+    "ADMIN_IDS": [6729929161],
+    "CHANNEL_USERNAME": "@your_channel_username"
+}
+""")
     exit(1)
 
 # === НАСТРОЙКИ ===
-BOT_TOKEN = config['BOT_TOKEN']
-ADMIN_IDS = config['ADMIN_IDS']
-CHANNEL_USERNAME = config['CHANNEL_USERNAME']
+BOT_TOKEN = config.get('BOT_TOKEN')
+ADMIN_IDS = config.get('ADMIN_IDS', [])
+CHANNEL_USERNAME = config.get('CHANNEL_USERNAME')
+
+# Проверяем что все переменные загружены
+if not BOT_TOKEN:
+    print("❌ BOT_TOKEN не найден в config.json")
+    exit(1)
+
+if not ADMIN_IDS:
+    print("❌ ADMIN_IDS не найден в config.json")
+    exit(1)
+
+if not CHANNEL_USERNAME:
+    print("❌ CHANNEL_USERNAME не найден в config.json")
+    exit(1)
 
 print(f"✅ BOT_TOKEN: {BOT_TOKEN[:10]}...")
 print(f"✅ ADMIN_IDS: {ADMIN_IDS}")
@@ -100,7 +99,7 @@ try:
     logger.info(f"✅ Бот запущен: {bot_info.first_name} (@{bot_info.username})")
 except Exception as e:
     logger.error(f"❌ Ошибка доступа к боту: {e}")
-    logger.error("⚠️ Проверьте правильность BOT_TOKEN")
+    logger.error("⚠️ Проверьте правильность BOT_TOKEN в config.json")
     exit(1)
 
 # Проверка канала
@@ -109,9 +108,8 @@ try:
     logger.info(f"✅ Канал найден: {chat.title}")
 except Exception as e:
     logger.error(f"❌ Ошибка доступа к каналу {CHANNEL_USERNAME}: {e}")
-    logger.error("⚠️ Проверьте: 1) Юзернейм канала 2) Бот добавлен как администратор")
+    logger.error("⚠️ Проверьте: 1) Юзернейм канала в config.json 2) Бот добавлен как администратор")
 # =================
-
 
 # === СИСТЕМА МОНИТОРИНГА ЗДОРОВЬЯ ===
 def log_error(error_type, error_message):
@@ -1091,6 +1089,7 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
 
 
