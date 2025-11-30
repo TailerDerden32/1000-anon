@@ -10,29 +10,28 @@ import threading
 import time
 import sys
 
-# === ЗАГРУЗКА КОНФИГУРАЦИИ ИЗ JSON ФАЙЛА ===
+# === ПАТИ ДЛЯ БАЗЫ ДАННЫХ ===
+# Используем volume для сохранения данных
+DATA_DIR = '/app/data'
+DB_PATH = os.path.join(DATA_DIR, 'bot.db')
+
+# Создаем директорию для данных если не существует
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# === ЗАГРУЗКА КОНФИГУРАЦИИ ===
 def load_config():
-    """Загружает конфигурацию из config.json"""
+    """Загружает конфигурацию из переменных окружения"""
     try:
-        with open('config.json', 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        
-        print("✅ Конфигурация загружена из config.json")
-        return config
-    except FileNotFoundError:
-        print("❌ Файл config.json не найден! Использую переменные окружения")
-        # Пробуем загрузить из переменных окружения
         config = {
             'BOT_TOKEN': os.environ.get('BOT_TOKEN'),
             'ADMIN_IDS': [int(x.strip()) for x in os.environ.get('ADMIN_IDS', '').split(',') if x.strip()],
             'CHANNEL_USERNAME': os.environ.get('CHANNEL_USERNAME')
         }
+        
+        print("✅ Конфигурация загружена из переменных окружения")
         return config
-    except json.JSONDecodeError as e:
-        print(f"❌ Ошибка в формате config.json: {e}")
-        return None
     except Exception as e:
-        print(f"❌ Ошибка загрузки config.json: {e}")
+        print(f"❌ Ошибка загрузки конфигурации: {e}")
         return None
 
 # Загружаем конфигурацию
@@ -64,9 +63,9 @@ print(f"✅ ADMIN_IDS: {ADMIN_IDS}")
 print(f"✅ CHANNEL_USERNAME: {CHANNEL_USERNAME}")
 
 # Настройки мониторинга
-HEALTH_CHECK_INTERVAL = 300  # 5 минут
-MAX_ERROR_COUNT = 3  # Максимальное количество ошибок перед перезапуском
-RESTART_DELAY = 60  # Задержка перед перезапуском в секундах
+HEALTH_CHECK_INTERVAL = 300
+MAX_ERROR_COUNT = 3
+RESTART_DELAY = 60
 
 # Глобальные переменные для статистики и мониторинга
 BOT_START_TIME = datetime.now()
@@ -85,7 +84,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('bot_health.log')
+        logging.FileHandler(os.path.join(DATA_DIR, 'bot_health.log'))
     ]
 )
 logger = logging.getLogger(__name__)
@@ -109,7 +108,6 @@ try:
 except Exception as e:
     logger.error(f"❌ Ошибка доступа к каналу {CHANNEL_USERNAME}: {e}")
     logger.error("⚠️ Проверьте: 1) Юзернейм канала 2) Бот добавлен как администратор")
-# =================
 
 # === СИСТЕМА МОНИТОРИНГА ЗДОРОВЬЯ ===
 def log_error(error_type, error_message):
@@ -121,7 +119,6 @@ def log_error(error_type, error_message):
     logger.error(f"🚨 Ошибка [{error_type}]: {error_message}")
     logger.error(f"📊 Счетчик ошибок: {ERROR_COUNT}/{MAX_ERROR_COUNT}")
     
-    # Логируем в базу данных
     log_bot_event('error', f"{error_type}: {error_message}")
 
 def reset_error_count():
@@ -133,14 +130,10 @@ def reset_error_count():
 def health_check():
     """Проверяет здоровье бота"""
     try:
-        # Проверка соединения с Telegram API
         bot.get_me()
-        
-        # Проверка доступа к каналу
         bot.get_chat(CHANNEL_USERNAME)
         
-        # Проверка базы данных
-        conn = sqlite3.connect('bot.db', check_same_thread=False)
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute("SELECT 1")
         conn.close()
@@ -153,23 +146,6 @@ def health_check():
         log_error('health_check', str(e))
         return False
 
-def auto_restart_if_needed():
-    """Автоматически перезапускает бота при необходимости"""
-    global ERROR_COUNT
-    
-    if ERROR_COUNT >= MAX_ERROR_COUNT:
-        logger.error(f"🚨 КРИТИЧЕСКАЯ ОШИБКА: Достигнут лимит ошибок ({ERROR_COUNT}/{MAX_ERROR_COUNT})")
-        logger.info("🔄 Инициирование автоматического перезапуска...")
-        
-        # Уведомляем админов о перезапуске
-        notify_admins_about_restart()
-        
-        # Ждем перед перезапуском
-        time.sleep(RESTART_DELAY)
-        
-        # Перезапускаем бота
-        restart_bot()
-
 def health_monitor():
     """Фоновая задача для мониторинга здоровья бота"""
     global HEALTH_MONITOR_RUNNING
@@ -178,96 +154,15 @@ def health_monitor():
     while HEALTH_MONITOR_RUNNING:
         try:
             if not health_check():
-                auto_restart_if_needed()
+                logger.error("🔄 Проблемы с здоровьем бота")
         except Exception as e:
             logger.error(f"❌ Ошибка в мониторе здоровья: {e}")
         
         time.sleep(HEALTH_CHECK_INTERVAL)
 
-def notify_admins_about_restart():
-    """Уведомляет админов о перезапуске"""
-    restart_reason = f"Достигнут лимит ошибок ({ERROR_COUNT}/{MAX_ERROR_COUNT})"
-    
-    for admin_id in ADMIN_IDS:
-        try:
-            bot.send_message(
-                admin_id,
-                f"🚨 <b>Автоматический перезапуск бота</b>\n\n"
-                f"📋 Причина: {restart_reason}\n"
-                f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"🔢 Счетчик ошибок: {ERROR_COUNT}\n\n"
-                f"⚙️ Бот будет перезапущен через {RESTART_DELAY} секунд...",
-                parse_mode='HTML'
-            )
-        except Exception as e:
-            logger.error(f"❌ Не удалось уведомить админа {admin_id}: {e}")
-
-def restart_bot():
-    """Перезапускает бота"""
-    logger.info("🔄 Перезапуск бота...")
-    log_bot_event('restart', 'Automatic restart due to error threshold')
-    
-    # Останавливаем мониторинг здоровья
-    global HEALTH_MONITOR_RUNNING
-    HEALTH_MONITOR_RUNNING = False
-    
-    # Перезапускаем процесс
-    python = sys.executable
-    os.execl(python, python, *sys.argv)
-
-# === УДАЛЕНИЕ WEBHOOK ПЕРЕД ЗАПУСКОМ ===
-def delete_webhook():
-    """Удаляет webhook перед запуском polling"""
-    try:
-        logger.info("🔄 Удаление webhook...")
-        bot.remove_webhook()
-        time.sleep(1)
-        logger.info("✅ Webhook удален")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Ошибка удаления webhook: {e}")
-        return False
-
-# === АВТО-ПИНГ ДЛЯ АКТИВНОСТИ ===
-def auto_ping():
-    """Автоматически поддерживает активность"""
-    time.sleep(15)
-    logger.info("🔄 Запуск авто-пинга...")
-
-    while True:
-        try:
-            # Простой пинг для поддержания активности
-            logger.info("✅ Бот активен")
-        except Exception as e:
-            logger.error(f"❌ Ошибка авто-пинга: {e}")
-        time.sleep(300)  # Пинг каждые 5 минут
-
-# === ЗАПУСК FLASK В ФОНЕ ===
-def run_flask():
-    """Запускает Flask сервер в фоновом режиме"""
-    time.sleep(5)  # Даем время запуститься polling
-    
-    # Пробуем разные порты если 8080 занят
-    ports = [8080, 8081, 8082, 8083, 8084]
-    
-    for port in ports:
-        try:
-            logger.info(f"🌐 Попытка запуска Flask сервера на порту {port}...")
-            app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
-            break
-        except OSError as e:
-            if "Address already in use" in str(e):
-                logger.warning(f"⚠️ Порт {port} занят, пробуем следующий...")
-                continue
-            else:
-                logger.error(f"❌ Ошибка запуска Flask: {e}")
-                break
-    else:
-        logger.error("❌ Не удалось запустить Flask сервер: все порты заняты")
-
 # === БАЗА ДАННЫХ ===
 def init_db():
-    conn = sqlite3.connect('bot.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cursor = conn.cursor()
 
     cursor.execute('''
@@ -288,7 +183,6 @@ def init_db():
         )
     ''')
 
-    # Таблица для статистики работы бота
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS bot_stats (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -298,7 +192,6 @@ def init_db():
         )
     ''')
 
-    # Таблица для ошибок
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS bot_errors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -311,7 +204,7 @@ def init_db():
 
     conn.commit()
     conn.close()
-    logger.info("✅ База данных инициализирована")
+    logger.info(f"✅ База данных инициализирована: {DB_PATH}")
 
 init_db()
 
@@ -319,7 +212,7 @@ def save_message_to_db(user_id, user_name, username, message_type, text, file_id
     global MESSAGE_COUNT
     MESSAGE_COUNT += 1
     
-    conn = sqlite3.connect('bot.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO messages (user_id, user_name, username, message_text, message_type, file_id, file_type, timestamp, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
@@ -331,7 +224,7 @@ def save_message_to_db(user_id, user_name, username, message_type, text, file_id
     return message_id
 
 def get_message_from_db(message_id):
-    conn = sqlite3.connect('bot.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM messages WHERE id = ?", (message_id,))
     message = cursor.fetchone()
@@ -339,14 +232,14 @@ def get_message_from_db(message_id):
     return message
 
 def update_publish_type(message_id, publish_type):
-    conn = sqlite3.connect('bot.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("UPDATE messages SET publish_type = ? WHERE id = ?", (publish_type, message_id))
     conn.commit()
     conn.close()
 
 def update_admin_reply(message_id, reply_text, reply_sent=False):
-    conn = sqlite3.connect('bot.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("UPDATE messages SET admin_reply = ?, reply_sent = ? WHERE id = ?", (reply_text, reply_sent, message_id))
     conn.commit()
@@ -354,22 +247,11 @@ def update_admin_reply(message_id, reply_text, reply_sent=False):
 
 def log_bot_event(event_type, details=""):
     """Логирует события бота для статистики"""
-    conn = sqlite3.connect('bot.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO bot_stats (event_type, event_time, details) VALUES (?, ?, ?)",
         (event_type, datetime.now().isoformat(), details)
-    )
-    conn.commit()
-    conn.close()
-
-def log_error_to_db(error_type, error_message):
-    """Логирует ошибку в базу данных"""
-    conn = sqlite3.connect('bot.db', check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO bot_errors (error_type, error_message, error_time) VALUES (?, ?, ?)",
-        (error_type, error_message, datetime.now().isoformat())
     )
     conn.commit()
     conn.close()
@@ -380,19 +262,15 @@ def send_to_channel(message_data, publish_type='normal', admin_id=None):
         message_type = message_data.get('message_type')
         text = message_data.get('text', '')
         file_id = message_data.get('file_id')
-        # Добавляем поддержку нескольких файлов
         file_ids = message_data.get('file_ids', [file_id] if file_id else [])
 
         if publish_type == 'forward' and admin_id:
-            # Отправляем контент АДМИНУ для ручного пересывания
             target_chat = admin_id
             forward_text = "🔄 <b>Перешлите это сообщение в канал:</b>"
         else:
-            # Обычная публикация - отправляем в канал анонимно
             target_chat = CHANNEL_USERNAME
             forward_text = ""
 
-        # Отправляем текст-инструкцию если есть
         if forward_text:
             bot.send_message(target_chat, forward_text, parse_mode='HTML')
 
@@ -401,18 +279,16 @@ def send_to_channel(message_data, publish_type='normal', admin_id=None):
             return True
             
         elif message_type == 'photo':
-            # Если несколько фото - используем медиа группу
             if len(file_ids) > 1:
                 media = []
                 for i, photo_id in enumerate(file_ids):
                     media.append(telebot.types.InputMediaPhoto(
                         photo_id, 
-                        caption=text if i == 0 else None,  # Текст только к первому фото
+                        caption=text if i == 0 else None,
                         parse_mode='HTML'
                     ))
                 bot.send_media_group(target_chat, media)
             else:
-                # Одно фото
                 bot.send_photo(target_chat, file_ids[0], caption=text, parse_mode='HTML')
             return True
             
@@ -455,24 +331,19 @@ def process_media_group(media_group_id):
     if not file_ids:
         return
     
-    # Сохраняем в базу (сохраняем только первое фото как основное, но передаем все file_ids)
     message_id = save_message_to_db(
         user.id,
         user.first_name or 'User',
         user.username or '',
         'photo',
         caption,
-        file_ids[0],  # основное фото
+        file_ids[0],
         'photo'
     )
     
-    # Уведомляем пользователя
     bot.send_message(user.id, f"✅ {len(file_ids)} фото отправлено")
-    
-    # Уведомляем админов (передаем все file_ids)
     notify_admins_group(message_id, user, caption, 'photo', file_ids)
     
-    # Удаляем группу из памяти
     del media_groups[media_group_id]
 
 def notify_admins_group(message_id, user, text, media_type, file_ids):
@@ -492,7 +363,6 @@ def notify_admins_group(message_id, user, text, media_type, file_ids):
 
     for admin_id in ADMIN_IDS:
         try:
-            # Отправляем группу фото
             if len(file_ids) > 1:
                 media = []
                 for i, file_id in enumerate(file_ids):
@@ -501,12 +371,10 @@ def notify_admins_group(message_id, user, text, media_type, file_ids):
                         caption=admin_msg if i == 0 else None,
                         parse_mode='HTML'
                     ))
-                msg = bot.send_media_group(admin_id, media)[0]  # берем первое сообщение группы
+                msg = bot.send_media_group(admin_id, media)[0]
             else:
-                # Одно фото
                 msg = bot.send_photo(admin_id, file_ids[0], caption=admin_msg, parse_mode='HTML')
             
-            # Добавляем кнопки выбора типа публикации
             keyboard = InlineKeyboardMarkup()
             keyboard.row(
                 InlineKeyboardButton("📝 Обычная публикация", callback_data=f"publish_normal_{message_id}"),
@@ -522,7 +390,7 @@ def notify_admins_group(message_id, user, text, media_type, file_ids):
         except Exception as e:
             logger.error(f"❌ Ошибка отправки админу {admin_id}: {e}")
 
-# === СТАТИСТИКА РАБОТЫ БОТА ===
+# === СТАТИСТИКА ===
 def get_bot_uptime():
     """Возвращает время работы бота"""
     uptime = datetime.now() - BOT_START_TIME
@@ -537,10 +405,9 @@ def get_bot_uptime():
 
 def get_bot_stats():
     """Возвращает статистику работы бота"""
-    conn = sqlite3.connect('bot.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cursor = conn.cursor()
     
-    # Статистика сообщений
     cursor.execute("SELECT COUNT(*) FROM messages")
     total_messages = cursor.fetchone()[0]
     
@@ -553,28 +420,11 @@ def get_bot_stats():
     cursor.execute("SELECT COUNT(DISTINCT user_id) FROM messages")
     unique_users = cursor.fetchone()[0]
     
-    # Статистика перезапусков
     cursor.execute("SELECT COUNT(*) FROM bot_stats WHERE event_type = 'restart'")
     restarts_count = cursor.fetchone()[0]
     
-    # Статистика ошибок
     cursor.execute("SELECT COUNT(*) FROM bot_errors")
     total_errors = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM bot_errors WHERE resolved = FALSE")
-    unresolved_errors = cursor.fetchone()[0]
-    
-    # Время последнего перезапуска
-    cursor.execute("SELECT event_time FROM bot_stats WHERE event_type = 'restart' ORDER BY id DESC LIMIT 1")
-    last_restart_row = cursor.fetchone()
-    last_restart = "никогда"
-    if last_restart_row:
-        last_restart_time = datetime.fromisoformat(last_restart_row[0])
-        last_restart_diff = (datetime.now() - last_restart_time).total_seconds()
-        if last_restart_diff < 3600:
-            last_restart = f"{int(last_restart_diff / 60)} минут назад"
-        else:
-            last_restart = f"{int(last_restart_diff / 3600)} часов назад"
     
     conn.close()
     
@@ -586,105 +436,23 @@ def get_bot_stats():
         'unique_users': unique_users,
         'restarts_count': restarts_count,
         'total_errors': total_errors,
-        'unresolved_errors': unresolved_errors,
         'current_error_count': ERROR_COUNT,
-        'max_error_count': MAX_ERROR_COUNT,
-        'last_restart': last_restart,
         'current_message_count': MESSAGE_COUNT
     }
 
-def get_health_status():
-    """Возвращает статус здоровья бота"""
-    stats = get_bot_stats()
-    
-    # Проверяем различные метрики здоровья
-    health_checks = []
-    
-    # Проверка счетчика ошибок
-    if ERROR_COUNT == 0:
-        health_checks.append("✅ Счетчик ошибок: нормальный")
-    elif ERROR_COUNT < MAX_ERROR_COUNT:
-        health_checks.append(f"⚠️ Счетчик ошибок: {ERROR_COUNT}/{MAX_ERROR_COUNT}")
-    else:
-        health_checks.append(f"🚨 Счетчик ошибок: КРИТИЧЕСКИЙ {ERROR_COUNT}/{MAX_ERROR_COUNT}")
-    
-    # Проверка нерешенных ошибок
-    if stats['unresolved_errors'] == 0:
-        health_checks.append("✅ Нерешенные ошибки: нет")
-    else:
-        health_checks.append(f"⚠️ Нерешенные ошибки: {stats['unresolved_errors']}")
-    
-    # Проверка времени работы
-    uptime_seconds = (datetime.now() - BOT_START_TIME).total_seconds()
-    if uptime_seconds > 3600:  # Больше 1 часа
-        health_checks.append("✅ Время работы: стабильное")
-    else:
-        health_checks.append("⚠️ Время работы: недавний запуск")
-    
-    return health_checks
-
-# === НОВАЯ ФУНКЦИЯ: ПОСЛЕДНИЕ ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЕЙ ===
-def get_recent_user_activity(limit=20):
-    """Возвращает последние действия пользователей"""
-    conn = sqlite3.connect('bot.db', check_same_thread=False)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        SELECT user_id, user_name, username, message_type, status, timestamp, COUNT(*) as activity_count
-        FROM messages 
-        WHERE timestamp >= datetime('now', '-7 days')
-        GROUP BY user_id, message_type, status
-        ORDER BY timestamp DESC
-        LIMIT ?
-    ''', (limit,))
-    
-    activities = cursor.fetchall()
-    conn.close()
-    
-    return activities
-
-def get_user_activity_stats():
-    """Возвращает статистику активности пользователей за последние 7 дней"""
-    conn = sqlite3.connect('bot.db', check_same_thread=False)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        SELECT 
-            user_id,
-            user_name,
-            username,
-            COUNT(*) as total_messages,
-            SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
-            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-            SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
-            MAX(timestamp) as last_activity
-        FROM messages 
-        WHERE timestamp >= datetime('now', '-7 days')
-        GROUP BY user_id
-        ORDER BY total_messages DESC
-        LIMIT 50
-    ''')
-    
-    stats = cursor.fetchall()
-    conn.close()
-    
-    return stats
-
-# === ОБРАБОТКА ОТВЕТОВ АДМИНОВ ПОЛЬЗОВАТЕЛЯМ ===
-user_reply_mode = {}  # Словарь для отслеживания режима ответа: {admin_id: message_id}
+# === ОБРАБОТКА ОТВЕТОВ АДМИНОВ ===
+user_reply_mode = {}
 
 @bot.message_handler(func=lambda message: message.from_user.id in ADMIN_IDS and message.text and not message.text.startswith('/'))
 def handle_admin_reply(message):
     """Обрабатывает ответы админов пользователям"""
     admin_id = message.from_user.id
     
-    # Проверяем, находится ли админ в режиме ответа
     if admin_id in user_reply_mode:
         target_message_id = user_reply_mode[admin_id]
         
         try:
-            # Получаем информацию о сообщении из базы данных
-            conn = sqlite3.connect('bot.db', check_same_thread=False)
+            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             cursor = conn.cursor()
             cursor.execute("SELECT user_id, user_name, message_text FROM messages WHERE id = ?", (target_message_id,))
             message_data = cursor.fetchone()
@@ -692,15 +460,12 @@ def handle_admin_reply(message):
             if message_data:
                 user_id, user_name, original_text = message_data
                 
-                # Отправляем ответ пользователю (БЕЗ данных админа)
                 try:
                     reply_text = f"💬 <b>Ответ от администратора:</b>\n\n{message.text}"
                     bot.send_message(user_id, reply_text, parse_mode='HTML')
                     
-                    # Сохраняем ответ в базу данных
                     update_admin_reply(target_message_id, message.text, True)
                     
-                    # Уведомляем админа об успешной отправке
                     bot.send_message(admin_id, f"✅ Ответ отправлен пользователю {user_name}")
                     logger.info(f"💬 Ответ админа {admin_id} отправлен пользователю {user_id}")
                     
@@ -716,14 +481,12 @@ def handle_admin_reply(message):
             logger.error(f"❌ Ошибка обработки ответа админа: {e}")
             bot.send_message(admin_id, "❌ Ошибка при обработке ответа")
         
-        # Выходим из режима ответа
         del user_reply_mode[admin_id]
         
     else:
-        # Если админ не в режиме ответа, обрабатываем как обычное сообщение
         handle_text(message)
 
-# === ОБРАБОТЧИКИ КОМАНД ===
+# === ОСНОВНЫЕ КОМАНДЫ ===
 @bot.message_handler(commands=['start'])
 def start(message):
     user = message.from_user
@@ -731,7 +494,7 @@ def start(message):
     bot.send_message(message.chat.id, 
                     "👋 <b>Привет!</b>\n\n"
                     "Отправь мне сообщение или медиафайл для публикации в канале.\n"
-                    "Всё будет отправлено, наверное.", 
+                    "Всё будет отправлено на модерацию.", 
                     parse_mode='HTML')
 
 @bot.message_handler(commands=['help'])
@@ -741,14 +504,7 @@ def help_command(message):
 /start - Начать работу
 /help - Показать справку
 /stats - Статистика бота (админы)
-/status - Статус работы бота (админы)
-/health - Проверка здоровья бота (админы)
-/restart - Принудительный перезапуск (админы)
-/activity - Активность пользователей (админы)
-/users - Статистика пользователей (админы)
 /pending - Сообщения на модерации (админы)
-/view - Просмотр сообщения (админы)
-/reply - Быстрый ответ (админы)
 
 📨 <b>Что можно отправить:</b>
 • Текстовые сообщения
@@ -756,7 +512,6 @@ def help_command(message):
 • Видео (с подписью или без) 
 • Голосовые сообщения
 • Документы
-• Аудиофайлы
 • Стикеры
 """
     bot.send_message(message.chat.id, help_text, parse_mode='HTML')
@@ -768,230 +523,31 @@ def stats_command(message):
         return
 
     try:
-        conn = sqlite3.connect('bot.db', check_same_thread=False)
-        cursor = conn.cursor()
+        stats = get_bot_stats()
+        
+        stats_text = f"""📊 <b>Статистика бота</b>
 
-        cursor.execute("SELECT COUNT(*) FROM messages")
-        total = cursor.fetchone()[0]
+⏱ Время работы: <b>{stats['uptime']}</b>
+📨 Всего сообщений: <b>{stats['total_messages']}</b>
+👥 Уникальных пользователей: <b>{stats['unique_users']}</b>
+✅ Одобрено: <b>{stats['approved_messages']}</b>
+⏳ Ожидают модерации: <b>{stats['pending_messages']}</b>
+🔄 Перезапусков: <b>{stats['restarts_count']}</b>
+🚨 Ошибок: <b>{stats['total_errors']}</b>"""
 
-        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM messages")
-        users = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM messages WHERE status = 'approved'")
-        approved = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM messages WHERE status = 'rejected'")
-        rejected = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM messages WHERE status = 'pending'")
-        pending = cursor.fetchone()[0]
-
-        stats = f"""📊 <b>Статистика бота</b>
-
-📨 Всего сообщений: <b>{total}</b>
-👥 Уникальных пользователей: <b>{users}</b>
-✅ Одобрено: <b>{approved}</b>
-❌ Отклонено: <b>{rejected}</b>
-⏳ Ожидают модерации: <b>{pending}</b>"""
-
-        bot.send_message(message.chat.id, stats, parse_mode='HTML')
-        conn.close()
+        bot.send_message(message.chat.id, stats_text, parse_mode='HTML')
 
     except Exception as e:
         logger.error(f"❌ Ошибка статистики: {e}")
         bot.send_message(message.chat.id, "❌ Ошибка при получении статистики")
 
-@bot.message_handler(commands=['status'])
-def status_command(message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-        
-    stats = get_bot_stats()
-    
-    status_text = f"""🖥 <b>Статус работы бота</b>
-
-⏱ Время работы: <b>{stats['uptime']}</b>
-📊 Сообщений обработано: <b>{stats['current_message_count']}</b>
-👤 Уникальных пользователей: <b>{stats['unique_users']}</b>
-🔄 Перезапусков: <b>{stats['restarts_count']}</b>
-🚨 Ошибок (всего/активные): <b>{stats['total_errors']}/{stats['unresolved_errors']}</b>
-⏰ Последний перезапуск: <b>{stats['last_restart']}</b>
-
-💾 <b>База данных:</b>
-📨 Всего сообщений: <b>{stats['total_messages']}</b>
-✅ Одобрено: <b>{stats['approved_messages']}</b>
-⏳ Ожидают: <b>{stats['pending_messages']}</b>"""
-
-    bot.send_message(message.chat.id, status_text, parse_mode='HTML')
-
-@bot.message_handler(commands=['health'])
-def health_command(message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    
-    # Выполняем проверку здоровья
-    is_healthy = health_check()
-    health_checks = get_health_status()
-    
-    health_status = "✅ <b>Бот здоров</b>" if is_healthy else "⚠️ <b>Обнаружены проблемы</b>"
-    
-    health_text = f"""❤️ <b>Проверка здоровья бота</b>
-
-{health_status}
-
-📋 <b>Результаты проверок:</b>
-""" + "\n".join(health_checks) + f"""
-
-⚙️ <b>Настройки мониторинга:</b>
-🔢 Максимальное количество ошибок: <b>{MAX_ERROR_COUNT}</b>
-⏱ Текущий счетчик ошибок: <b>{ERROR_COUNT}</b>
-🔄 Интервал проверки: <b>{HEALTH_CHECK_INTERVAL} сек</b>"""
-
-    bot.send_message(message.chat.id, health_text, parse_mode='HTML')
-
-@bot.message_handler(commands=['restart'])
-def restart_command(message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    
-    bot.send_message(message.chat.id, "🔄 Инициирование перезапуска бота...")
-    logger.info(f"🔄 Принудительный перезапуск инициирован админом {message.from_user.id}")
-    
-    # Уведомляем о перезапуске
-    for admin_id in ADMIN_IDS:
-        try:
-            bot.send_message(
-                admin_id,
-                f"🔄 <b>Принудительный перезапуск бота</b>\n\n"
-                f"👤 Инициатор: {message.from_user.first_name}\n"
-                f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"🔢 Счетчик ошибок: {ERROR_COUNT}\n\n"
-                f"⚙️ Бот будет перезапущен через {RESTART_DELAY} секунд...",
-                parse_mode='HTML'
-            )
-        except Exception as e:
-            logger.error(f"❌ Не удалось уведомить админа {admin_id}: {e}")
-    
-    # Ждем и перезапускаем
-    time.sleep(RESTART_DELAY)
-    restart_bot()
-
-@bot.message_handler(commands=['info'])
-def info_command(message):
-    """Команда для проверки настроек (только для админов)"""
-    if message.from_user.id not in ADMIN_IDS:
-        return
-        
-    try:
-        chat = bot.get_chat(CHANNEL_USERNAME)
-        channel_info = f"✅ {chat.title} ({CHANNEL_USERNAME})"
-    except Exception as e:
-        channel_info = f"❌ {CHANNEL_USERNAME} - ошибка: {e}"
-    
-    info_text = f"""
-⚙️ <b>Информация о настройках:</b>
-
-🤖 Бот: {'✅ Запущен' if BOT_TOKEN else '❌ Не настроен'}
-👥 Админов: {len(ADMIN_IDS)}
-📢 Канал: {channel_info}
-🆔 Ваш ID: {message.from_user.id}
-"""
-    bot.send_message(message.chat.id, info_text, parse_mode='HTML')
-
-# === НОВАЯ КОМАНДА: АКТИВНОСТЬ ПОЛЬЗОВАТЕЛЕЙ ===
-@bot.message_handler(commands=['activity'])
-def activity_command(message):
-    """Показывает последние действия пользователей"""
-    if message.from_user.id not in ADMIN_IDS:
-        return
-
-    try:
-        activities = get_recent_user_activity(15)
-        
-        if not activities:
-            bot.send_message(message.chat.id, "📊 За последние 7 дней активностей не найдено")
-            return
-        
-        response = "📊 <b>Последние действия пользователей (7 дней):</b>\n\n"
-        
-        for activity in activities:
-            user_id, user_name, username, msg_type, status, timestamp, count = activity
-            username_display = f"@{username}" if username else "нет юзернейма"
-            
-            # Иконки для типов сообщений
-            type_icons = {
-                'text': '📝',
-                'photo': '📷', 
-                'video': '🎥',
-                'voice': '🎤',
-                'document': '📄',
-                'sticker': '🎭'
-            }
-            icon = type_icons.get(msg_type, '📨')
-            
-            # Статусы
-            status_icons = {
-                'approved': '✅',
-                'pending': '⏳',
-                'rejected': '❌'
-            }
-            status_icon = status_icons.get(status, '📋')
-            
-            response += f"{icon} {user_name} ({username_display})\n"
-            response += f"   🆔: {user_id}\n"
-            response += f"   {status_icon} {msg_type}: {count} сообщ.\n"
-            response += f"   🕒 Последнее: {timestamp[:16]}\n"
-            response += "━━━━━━━━━━━━━━━━━━━━\n"
-        
-        bot.send_message(message.chat.id, response, parse_mode='HTML')
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения активности: {e}")
-        bot.send_message(message.chat.id, "❌ Ошибка при получении активности")
-
-# === НОВАЯ КОМАНДА: СТАТИСТИКА ПОЛЬЗОВАТЕЛЕЙ ===
-@bot.message_handler(commands=['users'])
-def users_command(message):
-    """Показывает статистику пользователей"""
-    if message.from_user.id not in ADMIN_IDS:
-        return
-
-    try:
-        user_stats = get_user_activity_stats()
-        
-        if not user_stats:
-            bot.send_message(message.chat.id, "👥 Нет данных о пользователях за последние 7 дней")
-            return
-        
-        response = "👥 <b>Статистика пользователей (7 дней):</b>\n\n"
-        
-        for i, stat in enumerate(user_stats[:10], 1):  # Показываем топ-10
-            user_id, user_name, username, total, approved, pending, rejected, last_activity = stat
-            username_display = f"@{username}" if username else "нет юзернейма"
-            
-            response += f"{i}. {user_name} ({username_display})\n"
-            response += f"   🆔: {user_id}\n"
-            response += f"   📨 Всего: {total} | ✅ {approved} | ⏳ {pending} | ❌ {rejected}\n"
-            response += f"   🕒 Последняя активность: {last_activity[:16]}\n"
-            response += "━━━━━━━━━━━━━━━━━━━━\n"
-        
-        if len(user_stats) > 10:
-            response += f"\n📈 ... и еще {len(user_stats) - 10} пользователей"
-        
-        bot.send_message(message.chat.id, response, parse_mode='HTML')
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения статистики пользователей: {e}")
-        bot.send_message(message.chat.id, "❌ Ошибка при получении статистики пользователей")
-
-# === ОБНОВЛЕННАЯ КОМАНДА: PENDING С КНОПКАМИ ===
 @bot.message_handler(commands=['pending'])
 def pending_messages(message):
     if message.from_user.id not in ADMIN_IDS:
         return
 
     try:
-        conn = sqlite3.connect('bot.db', check_same_thread=False)
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         cursor = conn.cursor()
         
         cursor.execute("SELECT id, user_id, user_name, username, message_text, message_type, file_id, file_type, timestamp, status FROM messages WHERE status = 'pending' ORDER BY id DESC LIMIT 10")
@@ -1001,13 +557,11 @@ def pending_messages(message):
             bot.send_message(message.chat.id, "📭 Нет сообщений, ожидающих модерации")
             return
         
-        # Отправляем заголовок
         bot.send_message(message.chat.id, "📋 <b>Сообщения ожидающие модерации:</b>", parse_mode='HTML')
         
         for msg in pending_messages:
             msg_id, user_id, user_name, username, text, msg_type, file_id, file_type, timestamp, status = msg
             
-            # Формируем текст для сообщения
             message_text = f"📨 <b>#{msg_id}</b> - {user_name} - {msg_type}\n"
             if text and len(text) > 100:
                 message_text += f"📝 {text[:100]}..."
@@ -1016,7 +570,6 @@ def pending_messages(message):
             else:
                 message_text += "📝 Нет текста"
             
-            # Добавляем быстрые кнопки действий
             from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
             
             quick_keyboard = InlineKeyboardMarkup()
@@ -1025,7 +578,6 @@ def pending_messages(message):
                 InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{msg_id}")
             )
             
-            # Отправляем каждое сообщение с кнопками отдельно
             bot.send_message(
                 message.chat.id, 
                 message_text,
@@ -1038,129 +590,6 @@ def pending_messages(message):
     except Exception as e:
         logger.error(f"❌ Ошибка получения ожидающих сообщений: {e}")
         bot.send_message(message.chat.id, "❌ Ошибка при получении списка сообщений")
-
-# === НОВАЯ КОМАНДА: ПРОСМОТР СООБЩЕНИЯ ===
-@bot.message_handler(commands=['view'])
-def view_message(message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-
-    try:
-        # Получаем ID сообщения из команды (/view 123)
-        parts = message.text.split()
-        if len(parts) < 2:
-            bot.send_message(message.chat.id, "❌ Используйте: /view <ID_сообщения>")
-            return
-
-        message_id = int(parts[1])
-        message_data = get_message_from_db(message_id)
-
-        if not message_data:
-            bot.send_message(message.chat.id, f"❌ Сообщение #{message_id} не найдено")
-            return
-
-        # Распаковываем данные сообщения
-        msg_id, user_id, user_name, username, text, msg_type, file_id, file_type, timestamp, status, admin_reply, reply_sent, publish_type = message_data
-
-        # Формируем детальную информацию
-        username_display = f"@{username}" if username else "нет юзернейма"
-        
-        detail_text = f"""📋 <b>Детали сообщения #{msg_id}</b>
-
-👤 <b>Пользователь:</b> {user_name} ({username_display})
-🆔 <b>ID пользователя:</b> {user_id}
-📋 <b>Тип:</b> {msg_type}
-📝 <b>Текст:</b> {text if text else 'Нет текста'}
-⏰ <b>Время:</b> {timestamp[:16]}
-📊 <b>Статус:</b> {status}"""
-
-        if admin_reply:
-            detail_text += f"\n💬 <b>Ответ админа:</b> {admin_reply}"
-
-        # Отправляем детали
-        bot.send_message(message.chat.id, detail_text, parse_mode='HTML')
-
-        # Если есть файл - отправляем его превью
-        if file_id and msg_type in ['photo', 'video', 'document', 'voice']:
-            try:
-                if msg_type == 'photo':
-                    bot.send_photo(message.chat.id, file_id, caption=f"📷 Фото из сообщения #{msg_id}")
-                elif msg_type == 'video':
-                    bot.send_video(message.chat.id, file_id, caption=f"🎥 Видео из сообщения #{msg_id}")
-                elif msg_type == 'document':
-                    bot.send_document(message.chat.id, file_id, caption=f"📄 Документ из сообщения #{msg_id}")
-                elif msg_type == 'voice':
-                    bot.send_voice(message.chat.id, file_id, caption=f"🎤 Голосовое из сообщения #{msg_id}")
-            except Exception as e:
-                logger.error(f"❌ Ошибка отправки файла: {e}")
-
-        # Добавляем кнопки действий
-        from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-        
-        keyboard = InlineKeyboardMarkup()
-        keyboard.row(
-            InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{msg_id}"),
-            InlineKeyboardButton("📝 Опубликовать", callback_data=f"publish_normal_{msg_id}")
-        )
-        keyboard.row(
-            InlineKeyboardButton("🔄 Переслать", callback_data=f"publish_forward_{msg_id}"),
-            InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{msg_id}")
-        )
-
-        bot.send_message(message.chat.id, "Выберите действие:", reply_markup=keyboard)
-
-    except ValueError:
-        bot.send_message(message.chat.id, "❌ Неверный формат ID. Используйте: /view <число>")
-    except Exception as e:
-        logger.error(f"❌ Ошибка просмотра сообщения: {e}")
-        bot.send_message(message.chat.id, "❌ Ошибка при получении сообщения")
-
-# === НОВАЯ КОМАНДА: БЫСТРЫЙ ОТВЕТ ===
-@bot.message_handler(commands=['reply'])
-def quick_reply(message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-
-    try:
-        # Получаем ID сообщения и текст ответа из команды (/reply 123 Текст ответа)
-        parts = message.text.split(' ', 2)
-        if len(parts) < 3:
-            bot.send_message(message.chat.id, "❌ Используйте: /reply <ID_сообщения> <текст ответа>")
-            return
-
-        message_id = int(parts[1])
-        reply_text = parts[2]
-
-        message_data = get_message_from_db(message_id)
-
-        if not message_data:
-            bot.send_message(message.chat.id, f"❌ Сообщение #{message_id} не найдено")
-            return
-
-        user_id = message_data[1]  # user_id
-        user_name = message_data[2]  # user_name
-
-        # Отправляем ответ пользователю
-        try:
-            formatted_reply = f"💬 <b>Ответ от администратора:</b>\n\n{reply_text}"
-            bot.send_message(user_id, formatted_reply, parse_mode='HTML')
-            
-            # Сохраняем ответ в базу данных
-            update_admin_reply(message_id, reply_text, True)
-            
-            bot.send_message(message.chat.id, f"✅ Ответ отправлен пользователю {user_name}")
-            logger.info(f"💬 Ответ админа {message.from_user.id} отправлен пользователю {user_id}")
-            
-        except Exception as e:
-            error_msg = f"❌ Не удалось отправить ответ пользователю: {e}"
-            bot.send_message(message.chat.id, error_msg)
-            logger.error(f"❌ Ошибка отправки ответа пользователю: {e}")
-
-    except ValueError:
-        bot.send_message(message.chat.id, "❌ Неверный формат ID. Используйте: /reply <число> <текст>")
-    except Exception as e:
-        logger.error(f"❌ Ошибка быстрого ответа: {e}")
-        bot.send_message(message.chat.id, "❌ Ошибка при отправке ответа")
 
 # === ОБРАБОТКА СООБЩЕНИЯ "ОПРОС" ===
 @bot.message_handler(func=lambda message: message.text and message.text.lower() == 'опрос')
@@ -1195,7 +624,7 @@ def handle_poll_request(message):
     
     bot.send_message(message.chat.id, poll_instructions, parse_mode='HTML')
 
-# === ОБНОВЛЕННЫЙ ОБРАБОТЧИК ТЕКСТА ===
+# === ОБРАБОТЧИКИ СООБЩЕНИЙ ===
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
     if message.text.startswith('/'):
@@ -1203,11 +632,9 @@ def handle_text(message):
 
     user = message.from_user
     
-    # Если админ в режиме ответа, пропускаем обычную обработку
     if user.id in ADMIN_IDS and user.id in user_reply_mode:
         return
     
-    # Если сообщение "опрос", обрабатываем отдельно
     if message.text.lower() == 'опрос':
         handle_poll_request(message)
         return
@@ -1222,7 +649,7 @@ def handle_text(message):
         message.text
     )
 
-    bot.send_message(message.chat.id, "✅ Сообщение отправлено")
+    bot.send_message(message.chat.id, "✅ Сообщение отправлено на модерацию")
     notify_admins(message_id, user, message.text, 'text', None, message.message_id)
 
 @bot.message_handler(content_types=['photo'])
@@ -1230,12 +657,9 @@ def handle_photo(message):
     user = message.from_user
     caption = message.caption or '📷 Фото'
     
-    # Берем фото самого высокого качества
     file_id = message.photo[-1].file_id
     
-    # Проверяем, является ли это групповым сообщением
     if message.media_group_id:
-        # Это группа медиа
         media_group_id = message.media_group_id
         
         if media_group_id not in media_groups:
@@ -1245,14 +669,11 @@ def handle_photo(message):
                 'file_ids': [],
                 'timestamp': datetime.now()
             }
-            # Запускаем таймер для обработки группы (ждем 1 секунду для сбора всех фото)
             threading.Timer(1.0, process_media_group, [media_group_id]).start()
         
-        # Добавляем фото в группу
         media_groups[media_group_id]['file_ids'].append(file_id)
         
     else:
-        # Одиночное фото
         message_id = save_message_to_db(
             user.id,
             user.first_name or 'User',
@@ -1263,7 +684,7 @@ def handle_photo(message):
             'photo'
         )
 
-        bot.send_message(message.chat.id, "✅ Фото отправлено")
+        bot.send_message(message.chat.id, "✅ Фото отправлено на модерацию")
         notify_admins(message_id, user, caption, 'photo', file_id, message.message_id)
 
 @bot.message_handler(content_types=['video'])
@@ -1282,7 +703,7 @@ def handle_video(message):
         'video'
     )
 
-    bot.send_message(message.chat.id, "✅ Видео отправлено")
+    bot.send_message(message.chat.id, "✅ Видео отправлено на модерацию")
     notify_admins(message_id, user, caption, 'video', file_id, message.message_id)
 
 @bot.message_handler(content_types=['voice'])
@@ -1300,7 +721,7 @@ def handle_voice(message):
         'voice'
     )
 
-    bot.send_message(message.chat.id, "✅ Голосовое сообщение отправлено")
+    bot.send_message(message.chat.id, "✅ Голосовое сообщение отправлено на модерацию")
     notify_admins(message_id, user, '🎤 Голосовое сообщение', 'voice', file_id, message.message_id)
 
 @bot.message_handler(content_types=['document'])
@@ -1319,7 +740,7 @@ def handle_document(message):
         'document'
     )
 
-    bot.send_message(message.chat.id, "✅ Документ отправлен")
+    bot.send_message(message.chat.id, "✅ Документ отправлен на модерацию")
     notify_admins(message_id, user, caption, 'document', file_id, message.message_id)
 
 @bot.message_handler(content_types=['sticker'])
@@ -1327,7 +748,6 @@ def handle_sticker(message):
     user = message.from_user
     logger.info(f"🎭 Стикер от {user.first_name} (ID: {user.id})")
     
-    # Сохраняем информацию о стикере
     sticker_emoji = message.sticker.emoji or '🎭'
     message_id = save_message_to_db(
         user.id,
@@ -1339,7 +759,7 @@ def handle_sticker(message):
         'sticker'
     )
 
-    bot.send_message(message.chat.id, "✅ Стикер отправлен")
+    bot.send_message(message.chat.id, "✅ Стикер отправлен на модерацию")
     notify_admins(message_id, user, f"{sticker_emoji} Стикер", 'sticker', message.sticker.file_id, message.message_id)
 
 # === УВЕДОМЛЕНИЯ АДМИНАМ ===
@@ -1359,7 +779,6 @@ def notify_admins(message_id, user, text, media_type, file_id=None, original_mes
 
     for admin_id in ADMIN_IDS:
         try:
-            # Сначала отправляем превью контента
             if media_type == 'photo' and file_id:
                 msg = bot.send_photo(admin_id, file_id, caption=admin_msg, parse_mode='HTML')
             elif media_type == 'video' and file_id:
@@ -1369,36 +788,29 @@ def notify_admins(message_id, user, text, media_type, file_id=None, original_mes
             elif media_type == 'document' and file_id:
                 msg = bot.send_document(admin_id, file_id, caption=admin_msg, parse_mode='HTML')
             elif media_type == 'sticker' and file_id:
-                # Для стикеров сначала отправляем описание, потом стикер
                 bot.send_message(admin_id, admin_msg, parse_mode='HTML')
                 sent_sticker = bot.send_sticker(admin_id, file_id)
                 msg = sent_sticker
             else:
-                # Для текста отправляем просто сообщение
                 msg = bot.send_message(admin_id, admin_msg, parse_mode='HTML')
             
-            # Добавляем кнопки выбора типа публикации
             keyboard = InlineKeyboardMarkup()
             keyboard.row(
-                InlineKeyboardButton("📝 Обычная публикация", callback_data=f"publish_normal_{message_id}"),
+                InlineKeyboardButton("📝 Опубликовать", callback_data=f"publish_normal_{message_id}"),
                 InlineKeyboardButton("🔄 Переслать", callback_data=f"publish_forward_{message_id}")
             )
             keyboard.row(
-                InlineKeyboardButton("💬 Ответить пользователю", callback_data=f"reply_{message_id}"),
+                InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{message_id}"),
                 InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{message_id}")
             )
             
-            if media_type != 'sticker':  # Для стикеров не редактируем разметку
+            if media_type != 'sticker':
                 bot.edit_message_reply_markup(admin_id, msg.message_id, reply_markup=keyboard)
             else:
-                # Для стикеров отправляем кнопки отдельным сообщением
                 bot.send_message(admin_id, "Выберите действие:", reply_markup=keyboard)
             
         except Exception as e:
             logger.error(f"❌ Ошибка отправки админу {admin_id}: {e}")
-            # Проверяем, если ошибка "chat not found", логируем это отдельно
-            if "chat not found" in str(e):
-                logger.error(f"🚨 Админ {admin_id} не найден! Проверьте правильность ID администратора")
 
 # === ОБРАБОТКА CALLBACK ===
 @bot.callback_query_handler(func=lambda call: True)
@@ -1410,7 +822,6 @@ def handle_callback(call):
         return
 
     try:
-        # Обработка кнопки "Просмотреть"
         if call.data.startswith('view_'):
             message_id = int(call.data.split('_')[1])
             message_data = get_message_from_db(message_id)
@@ -1419,10 +830,8 @@ def handle_callback(call):
                 bot.answer_callback_query(call.id, "❌ Сообщение не найдено")
                 return
 
-            # Распаковываем данные сообщения
             msg_id, user_id, user_name, username, text, msg_type, file_id, file_type, timestamp, status, admin_reply, reply_sent, publish_type = message_data
 
-            # Формируем детальную информацию
             username_display = f"@{username}" if username else "нет юзернейма"
             
             detail_text = f"""📋 <b>Детали сообщения #{msg_id}</b>
@@ -1437,10 +846,8 @@ def handle_callback(call):
             if admin_reply:
                 detail_text += f"\n💬 <b>Ответ админа:</b> {admin_reply}"
 
-            # Отправляем детали
             bot.send_message(call.message.chat.id, detail_text, parse_mode='HTML')
 
-            # Если есть файл - отправляем его превью
             if file_id and msg_type in ['photo', 'video', 'document', 'voice']:
                 try:
                     if msg_type == 'photo':
@@ -1454,7 +861,6 @@ def handle_callback(call):
                 except Exception as e:
                     logger.error(f"❌ Ошибка отправки файла: {e}")
 
-            # Добавляем кнопки действий
             from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
             
             keyboard = InlineKeyboardMarkup()
@@ -1474,13 +880,10 @@ def handle_callback(call):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
-            # ПРОВЕРКА: если сообщение не найдено
             if not message_data:
                 bot.answer_callback_query(call.id, "❌ Сообщение не найдено")
                 return
                 
-            # ИСПРАВЛЕНИЕ: правильные индексы колонок
-            # message_data[9] - статус (10-я колонка)
             if message_data[9] != 'pending':
                 status = message_data[9]
                 status_texts = {
@@ -1491,21 +894,20 @@ def handle_callback(call):
                 bot.answer_callback_query(call.id, f"Сообщение {status_texts.get(status, status)}")
                 return
 
-            # Устанавливаем тип публикации "обычная"
             update_publish_type(message_id, 'normal')
             
             success = send_to_channel({
-                'message_type': message_data[5],  # 6-я колонка - message_type
-                'text': message_data[4],         # 5-я колонка - message_text
-                'file_id': message_data[6],      # 7-я колонка - file_id
-                'file_ids': [message_data[6]]    # передаем как список для совместимости
+                'message_type': message_data[5],
+                'text': message_data[4],
+                'file_id': message_data[6],
+                'file_ids': [message_data[6]]
             }, 'normal')
 
-            conn = sqlite3.connect('bot.db', check_same_thread=False)
+            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             cursor = conn.cursor()
             if success:
                 cursor.execute("UPDATE messages SET status = 'approved' WHERE id = ?", (message_id,))
-                status_text = f"✅ Сообщение #{message_id} опубликовано (обычная публикация)"
+                status_text = f"✅ Сообщение #{message_id} опубликовано"
                 logger.info(f"✅ Сообщение #{message_id} опубликовано")
             else:
                 cursor.execute("UPDATE messages SET status = 'error' WHERE id = ?", (message_id,))
@@ -1527,12 +929,10 @@ def handle_callback(call):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
-            # ПРОВЕРКА: если сообщение не найдено
             if not message_data:
                 bot.answer_callback_query(call.id, "❌ Сообщение не найдено")
                 return
                 
-            # ИСПРАВЛЕНИЕ: правильные индексы колонок
             if message_data[9] != 'pending':
                 status = message_data[9]
                 status_texts = {
@@ -1543,17 +943,16 @@ def handle_callback(call):
                 bot.answer_callback_query(call.id, f"Сообщение {status_texts.get(status, status)}")
                 return
 
-            # Устанавливаем тип публикации "пересылка"
             update_publish_type(message_id, 'forward')
             
             success = send_to_channel({
-                'message_type': message_data[5],  # 6-я колонка - message_type
-                'text': message_data[4],         # 5-я колонка - message_text
-                'file_id': message_data[6],      # 7-я колонка - file_id
-                'file_ids': [message_data[6]]    # передаем как список для совместимости
+                'message_type': message_data[5],
+                'text': message_data[4],
+                'file_id': message_data[6],
+                'file_ids': [message_data[6]]
             }, 'forward', call.from_user.id)
 
-            conn = sqlite3.connect('bot.db', check_same_thread=False)
+            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             cursor = conn.cursor()
             if success:
                 cursor.execute("UPDATE messages SET status = 'approved' WHERE id = ?", (message_id,))
@@ -1579,17 +978,14 @@ def handle_callback(call):
             message_id = int(call.data.split('_')[1])
             message_data = get_message_from_db(message_id)
             
-            # ПРОВЕРКА: если сообщение не найдено
             if not message_data:
                 bot.answer_callback_query(call.id, "❌ Сообщение не найдено")
                 return
             
-            # Сохраняем ID сообщения для ответа
             user_reply_mode[call.from_user.id] = message_id
             
-            # Получаем информацию о сообщении для контекста
-            user_name = message_data[2]  # user_name
-            message_text = message_data[4]  # message_text
+            user_name = message_data[2]
+            message_text = message_data[4]
             
             context_text = f"💬 <b>Ответ на сообщение #{message_id}</b>\n\n"
             context_text += f"👤 <b>Пользователь:</b> {user_name}\n"
@@ -1601,7 +997,7 @@ def handle_callback(call):
 
         elif call.data.startswith('reject_'):
             message_id = int(call.data.split('_')[1])
-            conn = sqlite3.connect('bot.db', check_same_thread=False)
+            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             cursor = conn.cursor()
             cursor.execute("UPDATE messages SET status = 'rejected' WHERE id = ?", (message_id,))
             conn.commit()
@@ -1639,29 +1035,72 @@ def health_endpoint():
     else:
         return "ERROR", 500
 
+# === УДАЛЕНИЕ WEBHOOK ПЕРЕД ЗАПУСКОМ ===
+def delete_webhook():
+    """Удаляет webhook перед запуском polling"""
+    try:
+        logger.info("🔄 Удаление webhook...")
+        bot.remove_webhook()
+        time.sleep(1)
+        logger.info("✅ Webhook удален")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления webhook: {e}")
+        return False
+
+# === АВТО-ПИНГ ДЛЯ АКТИВНОСТИ ===
+def auto_ping():
+    """Автоматически поддерживает активность"""
+    time.sleep(15)
+    logger.info("🔄 Запуск авто-пинга...")
+
+    while True:
+        try:
+            logger.info("✅ Бот активен")
+        except Exception as e:
+            logger.error(f"❌ Ошибка авто-пинга: {e}")
+        time.sleep(300)
+
+# === ЗАПУСК FLASK В ФОНЕ ===
+def run_flask():
+    """Запускает Flask сервер в фоновом режиме"""
+    time.sleep(5)
+    
+    ports = [8080, 8081, 8082, 8083, 8084]
+    
+    for port in ports:
+        try:
+            logger.info(f"🌐 Попытка запуска Flask сервера на порту {port}...")
+            app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
+            break
+        except OSError as e:
+            if "Address already in use" in str(e):
+                logger.warning(f"⚠️ Порт {port} занят, пробуем следующий...")
+                continue
+            else:
+                logger.error(f"❌ Ошибка запуска Flask: {e}")
+                break
+    else:
+        logger.error("❌ Не удалось запустить Flask сервер: все порты заняты")
+
 if __name__ == "__main__":
     logger.info("🚀 Запуск бота...")
+    logger.info(f"📁 База данных: {DB_PATH}")
     
-    # Логируем запуск бота
     log_bot_event('start', f"Bot started at {BOT_START_TIME}")
 
-    # Запускаем мониторинг здоровья
     health_monitor_thread = threading.Thread(target=health_monitor, daemon=True)
     health_monitor_thread.start()
     logger.info("❤️ Мониторинг здоровья запущен")
 
-    # УДАЛЯЕМ WEBHOOK ПЕРЕД ЗАПУСКОМ
     delete_webhook()
 
-    # Запускаем авто-пинг в фоне
     ping_thread = threading.Thread(target=auto_ping, daemon=True)
     ping_thread.start()
 
-    # Запускаем Flask в фоне
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Запускаем polling в ОСНОВНОМ потоке
     logger.info("🤖 Запуск polling...")
     try:
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
@@ -1671,6 +1110,5 @@ if __name__ == "__main__":
         logger.info("🔄 Перезапуск polling через 10 секунд...")
         log_bot_event('restart', f"Restart due to error: {e}")
         time.sleep(10)
-        # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
