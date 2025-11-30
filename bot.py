@@ -76,6 +76,9 @@ ERROR_COUNT = 0
 LAST_ERROR_TIME = None
 HEALTH_MONITOR_RUNNING = False
 
+# Глобальная переменная для хранения групп медиа
+media_groups = {}
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO, 
@@ -377,6 +380,8 @@ def send_to_channel(message_data, publish_type='normal', admin_id=None):
         message_type = message_data.get('message_type')
         text = message_data.get('text', '')
         file_id = message_data.get('file_id')
+        # Добавляем поддержку нескольких файлов
+        file_ids = message_data.get('file_ids', [file_id] if file_id else [])
 
         if publish_type == 'forward' and admin_id:
             # Отправляем контент АДМИНУ для ручного пересывания
@@ -387,36 +392,46 @@ def send_to_channel(message_data, publish_type='normal', admin_id=None):
             target_chat = CHANNEL_USERNAME
             forward_text = ""
 
+        # Отправляем текст-инструкцию если есть
+        if forward_text:
+            bot.send_message(target_chat, forward_text, parse_mode='HTML')
+
         if message_type == 'text':
-            if forward_text:
-                bot.send_message(target_chat, forward_text, parse_mode='HTML')
             bot.send_message(target_chat, text, parse_mode='HTML')
             return True
+            
         elif message_type == 'photo':
-            if forward_text:
-                bot.send_message(target_chat, forward_text, parse_mode='HTML')
-            bot.send_photo(target_chat, file_id, caption=text, parse_mode='HTML')
+            # Если несколько фото - используем медиа группу
+            if len(file_ids) > 1:
+                media = []
+                for i, photo_id in enumerate(file_ids):
+                    media.append(telebot.types.InputMediaPhoto(
+                        photo_id, 
+                        caption=text if i == 0 else None,  # Текст только к первому фото
+                        parse_mode='HTML'
+                    ))
+                bot.send_media_group(target_chat, media)
+            else:
+                # Одно фото
+                bot.send_photo(target_chat, file_ids[0], caption=text, parse_mode='HTML')
             return True
+            
         elif message_type == 'video':
-            if forward_text:
-                bot.send_message(target_chat, forward_text, parse_mode='HTML')
-            bot.send_video(target_chat, file_id, caption=text, parse_mode='HTML')
+            bot.send_video(target_chat, file_ids[0], caption=text, parse_mode='HTML')
             return True
+            
         elif message_type == 'voice':
-            if forward_text:
-                bot.send_message(target_chat, forward_text, parse_mode='HTML')
-            bot.send_voice(target_chat, file_id, caption=text, parse_mode='HTML')
+            bot.send_voice(target_chat, file_ids[0], caption=text, parse_mode='HTML')
             return True
+            
         elif message_type == 'document':
-            if forward_text:
-                bot.send_message(target_chat, forward_text, parse_mode='HTML')
-            bot.send_document(target_chat, file_id, caption=text, parse_mode='HTML')
+            bot.send_document(target_chat, file_ids[0], caption=text, parse_mode='HTML')
             return True
+            
         elif message_type == 'sticker':
-            if forward_text:
-                bot.send_message(target_chat, forward_text, parse_mode='HTML')
-            bot.send_sticker(target_chat, file_id)
+            bot.send_sticker(target_chat, file_ids[0])
             return True
+            
         else:
             logger.error(f"❌ Неподдерживаемый тип: {message_type}")
             return False
@@ -425,6 +440,87 @@ def send_to_channel(message_data, publish_type='normal', admin_id=None):
         logger.error(f"❌ Ошибка отправки в канал: {e}")
         log_error('send_to_channel', str(e))
         return False
+
+# === ОБРАБОТКА ГРУПП МЕДИА ===
+def process_media_group(media_group_id):
+    """Обрабатывает группу медиа после сбора всех фото"""
+    if media_group_id not in media_groups:
+        return
+        
+    group_data = media_groups[media_group_id]
+    user = group_data['user']
+    caption = group_data['caption']
+    file_ids = group_data['file_ids']
+    
+    if not file_ids:
+        return
+    
+    # Сохраняем в базу (сохраняем только первое фото как основное, но передаем все file_ids)
+    message_id = save_message_to_db(
+        user.id,
+        user.first_name or 'User',
+        user.username or '',
+        'photo',
+        caption,
+        file_ids[0],  # основное фото
+        'photo'
+    )
+    
+    # Уведомляем пользователя
+    bot.send_message(user.id, f"✅ {len(file_ids)} фото отправлено")
+    
+    # Уведомляем админов (передаем все file_ids)
+    notify_admins_group(message_id, user, caption, 'photo', file_ids)
+    
+    # Удаляем группу из памяти
+    del media_groups[media_group_id]
+
+def notify_admins_group(message_id, user, text, media_type, file_ids):
+    """Уведомляет админов о группе медиа"""
+    icons = {'text': '📝', 'photo': '📷', 'video': '🎥', 'voice': '🎤', 'document': '📄', 'sticker': '🎭'}
+    icon = icons.get(media_type, '📨')
+    username_display = f"@{user.username}" if user.username else "нет юзернейма"
+
+    admin_msg = f"""{icon} <b>Новое сообщение</b> #{message_id}
+
+👤 <b>От:</b> {user.first_name} ({username_display})
+🆔 <b>ID:</b> {user.id}
+📋 <b>Тип:</b> {media_type} ({len(file_ids)} шт.)
+📝 <b>Текст:</b> {text if text else 'Нет текста'}"""
+
+    from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    for admin_id in ADMIN_IDS:
+        try:
+            # Отправляем группу фото
+            if len(file_ids) > 1:
+                media = []
+                for i, file_id in enumerate(file_ids):
+                    media.append(telebot.types.InputMediaPhoto(
+                        file_id, 
+                        caption=admin_msg if i == 0 else None,
+                        parse_mode='HTML'
+                    ))
+                msg = bot.send_media_group(admin_id, media)[0]  # берем первое сообщение группы
+            else:
+                # Одно фото
+                msg = bot.send_photo(admin_id, file_ids[0], caption=admin_msg, parse_mode='HTML')
+            
+            # Добавляем кнопки выбора типа публикации
+            keyboard = InlineKeyboardMarkup()
+            keyboard.row(
+                InlineKeyboardButton("📝 Обычная публикация", callback_data=f"publish_normal_{message_id}"),
+                InlineKeyboardButton("🔄 Переслать", callback_data=f"publish_forward_{message_id}")
+            )
+            keyboard.row(
+                InlineKeyboardButton("💬 Ответить пользователю", callback_data=f"reply_{message_id}"),
+                InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{message_id}")
+            )
+            
+            bot.edit_message_reply_markup(admin_id, msg.message_id, reply_markup=keyboard)
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки админу {admin_id}: {e}")
 
 # === СТАТИСТИКА РАБОТЫ БОТА ===
 def get_bot_uptime():
@@ -650,6 +746,9 @@ def help_command(message):
 /restart - Принудительный перезапуск (админы)
 /activity - Активность пользователей (админы)
 /users - Статистика пользователей (админы)
+/pending - Сообщения на модерации (админы)
+/view - Просмотр сообщения (админы)
+/reply - Быстрый ответ (админы)
 
 📨 <b>Что можно отправить:</b>
 • Текстовые сообщения
@@ -885,6 +984,7 @@ def users_command(message):
         logger.error(f"❌ Ошибка получения статистики пользователей: {e}")
         bot.send_message(message.chat.id, "❌ Ошибка при получении статистики пользователей")
 
+# === ОБНОВЛЕННАЯ КОМАНДА: PENDING С КНОПКАМИ ===
 @bot.message_handler(commands=['pending'])
 def pending_messages(message):
     if message.from_user.id not in ADMIN_IDS:
@@ -894,7 +994,6 @@ def pending_messages(message):
         conn = sqlite3.connect('bot.db', check_same_thread=False)
         cursor = conn.cursor()
         
-        # ИСПРАВЛЕНИЕ: выбираем только 10 нужных колонок вместо всех
         cursor.execute("SELECT id, user_id, user_name, username, message_text, message_type, file_id, file_type, timestamp, status FROM messages WHERE status = 'pending' ORDER BY id DESC LIMIT 10")
         pending_messages = cursor.fetchall()
         
@@ -902,26 +1001,201 @@ def pending_messages(message):
             bot.send_message(message.chat.id, "📭 Нет сообщений, ожидающих модерации")
             return
         
-        response = "📋 <b>Сообщения ожидающие модерации:</b>\n\n"
+        # Отправляем заголовок
+        bot.send_message(message.chat.id, "📋 <b>Сообщения ожидающие модерации:</b>", parse_mode='HTML')
         
         for msg in pending_messages:
-            # ИСПРАВЛЕНИЕ: распаковываем только 10 значений
             msg_id, user_id, user_name, username, text, msg_type, file_id, file_type, timestamp, status = msg
-            response += f"#{msg_id} - {user_name} - {msg_type}\n"
-            if text and len(text) > 50:
-                response += f"📝 {text[:50]}...\n"
+            
+            # Формируем текст для сообщения
+            message_text = f"📨 <b>#{msg_id}</b> - {user_name} - {msg_type}\n"
+            if text and len(text) > 100:
+                message_text += f"📝 {text[:100]}..."
             elif text:
-                response += f"📝 {text}\n"
-            response += "━━━━━━━━━━━━━━━━━━━━\n"
+                message_text += f"📝 {text}"
+            else:
+                message_text += "📝 Нет текста"
+            
+            # Добавляем быстрые кнопки действий
+            from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+            
+            quick_keyboard = InlineKeyboardMarkup()
+            quick_keyboard.row(
+                InlineKeyboardButton("👁 Просмотреть", callback_data=f"view_{msg_id}"),
+                InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{msg_id}")
+            )
+            
+            # Отправляем каждое сообщение с кнопками отдельно
+            bot.send_message(
+                message.chat.id, 
+                message_text,
+                parse_mode='HTML',
+                reply_markup=quick_keyboard
+            )
         
-        bot.send_message(message.chat.id, response, parse_mode='HTML')
         conn.close()
         
     except Exception as e:
         logger.error(f"❌ Ошибка получения ожидающих сообщений: {e}")
         bot.send_message(message.chat.id, "❌ Ошибка при получении списка сообщений")
 
-# === ОБРАБОТЧИКИ СООБЩЕНИЙ ===
+# === НОВАЯ КОМАНДА: ПРОСМОТР СООБЩЕНИЯ ===
+@bot.message_handler(commands=['view'])
+def view_message(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    try:
+        # Получаем ID сообщения из команды (/view 123)
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.send_message(message.chat.id, "❌ Используйте: /view <ID_сообщения>")
+            return
+
+        message_id = int(parts[1])
+        message_data = get_message_from_db(message_id)
+
+        if not message_data:
+            bot.send_message(message.chat.id, f"❌ Сообщение #{message_id} не найдено")
+            return
+
+        # Распаковываем данные сообщения
+        msg_id, user_id, user_name, username, text, msg_type, file_id, file_type, timestamp, status, admin_reply, reply_sent, publish_type = message_data
+
+        # Формируем детальную информацию
+        username_display = f"@{username}" if username else "нет юзернейма"
+        
+        detail_text = f"""📋 <b>Детали сообщения #{msg_id}</b>
+
+👤 <b>Пользователь:</b> {user_name} ({username_display})
+🆔 <b>ID пользователя:</b> {user_id}
+📋 <b>Тип:</b> {msg_type}
+📝 <b>Текст:</b> {text if text else 'Нет текста'}
+⏰ <b>Время:</b> {timestamp[:16]}
+📊 <b>Статус:</b> {status}"""
+
+        if admin_reply:
+            detail_text += f"\n💬 <b>Ответ админа:</b> {admin_reply}"
+
+        # Отправляем детали
+        bot.send_message(message.chat.id, detail_text, parse_mode='HTML')
+
+        # Если есть файл - отправляем его превью
+        if file_id and msg_type in ['photo', 'video', 'document', 'voice']:
+            try:
+                if msg_type == 'photo':
+                    bot.send_photo(message.chat.id, file_id, caption=f"📷 Фото из сообщения #{msg_id}")
+                elif msg_type == 'video':
+                    bot.send_video(message.chat.id, file_id, caption=f"🎥 Видео из сообщения #{msg_id}")
+                elif msg_type == 'document':
+                    bot.send_document(message.chat.id, file_id, caption=f"📄 Документ из сообщения #{msg_id}")
+                elif msg_type == 'voice':
+                    bot.send_voice(message.chat.id, file_id, caption=f"🎤 Голосовое из сообщения #{msg_id}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки файла: {e}")
+
+        # Добавляем кнопки действий
+        from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+        
+        keyboard = InlineKeyboardMarkup()
+        keyboard.row(
+            InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{msg_id}"),
+            InlineKeyboardButton("📝 Опубликовать", callback_data=f"publish_normal_{msg_id}")
+        )
+        keyboard.row(
+            InlineKeyboardButton("🔄 Переслать", callback_data=f"publish_forward_{msg_id}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{msg_id}")
+        )
+
+        bot.send_message(message.chat.id, "Выберите действие:", reply_markup=keyboard)
+
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Неверный формат ID. Используйте: /view <число>")
+    except Exception as e:
+        logger.error(f"❌ Ошибка просмотра сообщения: {e}")
+        bot.send_message(message.chat.id, "❌ Ошибка при получении сообщения")
+
+# === НОВАЯ КОМАНДА: БЫСТРЫЙ ОТВЕТ ===
+@bot.message_handler(commands=['reply'])
+def quick_reply(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    try:
+        # Получаем ID сообщения и текст ответа из команды (/reply 123 Текст ответа)
+        parts = message.text.split(' ', 2)
+        if len(parts) < 3:
+            bot.send_message(message.chat.id, "❌ Используйте: /reply <ID_сообщения> <текст ответа>")
+            return
+
+        message_id = int(parts[1])
+        reply_text = parts[2]
+
+        message_data = get_message_from_db(message_id)
+
+        if not message_data:
+            bot.send_message(message.chat.id, f"❌ Сообщение #{message_id} не найдено")
+            return
+
+        user_id = message_data[1]  # user_id
+        user_name = message_data[2]  # user_name
+
+        # Отправляем ответ пользователю
+        try:
+            formatted_reply = f"💬 <b>Ответ от администратора:</b>\n\n{reply_text}"
+            bot.send_message(user_id, formatted_reply, parse_mode='HTML')
+            
+            # Сохраняем ответ в базу данных
+            update_admin_reply(message_id, reply_text, True)
+            
+            bot.send_message(message.chat.id, f"✅ Ответ отправлен пользователю {user_name}")
+            logger.info(f"💬 Ответ админа {message.from_user.id} отправлен пользователю {user_id}")
+            
+        except Exception as e:
+            error_msg = f"❌ Не удалось отправить ответ пользователю: {e}"
+            bot.send_message(message.chat.id, error_msg)
+            logger.error(f"❌ Ошибка отправки ответа пользователю: {e}")
+
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Неверный формат ID. Используйте: /reply <число> <текст>")
+    except Exception as e:
+        logger.error(f"❌ Ошибка быстрого ответа: {e}")
+        bot.send_message(message.chat.id, "❌ Ошибка при отправке ответа")
+
+# === ОБРАБОТКА СООБЩЕНИЯ "ОПРОС" ===
+@bot.message_handler(func=lambda message: message.text and message.text.lower() == 'опрос')
+def handle_poll_request(message):
+    """Обрабатывает сообщение 'опрос' и отправляет инструкцию"""
+    user = message.from_user
+    logger.info(f"📊 Запрос опроса от {user.first_name} (ID: {user.id})")
+    
+    poll_instructions = """
+📊 <b>Создание опроса</b>
+
+Чтобы создать опрос, отправьте сообщение в формате:
+
+<b>Опрос</b>
+<b>Вопрос опроса?</b>
+
+✅ Вариант 1
+✅ Вариант 2  
+✅ Вариант 3
+
+📝 <b>Пример:</b>
+Опрос
+Какой ваш любимый цвет?
+
+✅ Красный
+✅ Синий
+✅ Зеленый
+✅ Желтый
+
+Бот отправит это сообщение админам для публикации в канале как опрос.
+"""
+    
+    bot.send_message(message.chat.id, poll_instructions, parse_mode='HTML')
+
+# === ОБНОВЛЕННЫЙ ОБРАБОТЧИК ТЕКСТА ===
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
     if message.text.startswith('/'):
@@ -931,6 +1205,11 @@ def handle_text(message):
     
     # Если админ в режиме ответа, пропускаем обычную обработку
     if user.id in ADMIN_IDS and user.id in user_reply_mode:
+        return
+    
+    # Если сообщение "опрос", обрабатываем отдельно
+    if message.text.lower() == 'опрос':
+        handle_poll_request(message)
         return
     
     logger.info(f"📝 Текст от {user.first_name} (ID: {user.id})")
@@ -950,20 +1229,42 @@ def handle_text(message):
 def handle_photo(message):
     user = message.from_user
     caption = message.caption or '📷 Фото'
+    
+    # Берем фото самого высокого качества
     file_id = message.photo[-1].file_id
+    
+    # Проверяем, является ли это групповым сообщением
+    if message.media_group_id:
+        # Это группа медиа
+        media_group_id = message.media_group_id
+        
+        if media_group_id not in media_groups:
+            media_groups[media_group_id] = {
+                'user': user,
+                'caption': caption,
+                'file_ids': [],
+                'timestamp': datetime.now()
+            }
+            # Запускаем таймер для обработки группы (ждем 1 секунду для сбора всех фото)
+            threading.Timer(1.0, process_media_group, [media_group_id]).start()
+        
+        # Добавляем фото в группу
+        media_groups[media_group_id]['file_ids'].append(file_id)
+        
+    else:
+        # Одиночное фото
+        message_id = save_message_to_db(
+            user.id,
+            user.first_name or 'User',
+            user.username or '',
+            'photo',
+            caption,
+            file_id,
+            'photo'
+        )
 
-    message_id = save_message_to_db(
-        user.id,
-        user.first_name or 'User',
-        user.username or '',
-        'photo',
-        caption,
-        file_id,
-        'photo'
-    )
-
-    bot.send_message(message.chat.id, "✅ Фото отправлено")
-    notify_admins(message_id, user, caption, 'photo', file_id, message.message_id)
+        bot.send_message(message.chat.id, "✅ Фото отправлено")
+        notify_admins(message_id, user, caption, 'photo', file_id, message.message_id)
 
 @bot.message_handler(content_types=['video'])
 def handle_video(message):
@@ -1109,7 +1410,67 @@ def handle_callback(call):
         return
 
     try:
-        if call.data.startswith('publish_normal_'):
+        # Обработка кнопки "Просмотреть"
+        if call.data.startswith('view_'):
+            message_id = int(call.data.split('_')[1])
+            message_data = get_message_from_db(message_id)
+
+            if not message_data:
+                bot.answer_callback_query(call.id, "❌ Сообщение не найдено")
+                return
+
+            # Распаковываем данные сообщения
+            msg_id, user_id, user_name, username, text, msg_type, file_id, file_type, timestamp, status, admin_reply, reply_sent, publish_type = message_data
+
+            # Формируем детальную информацию
+            username_display = f"@{username}" if username else "нет юзернейма"
+            
+            detail_text = f"""📋 <b>Детали сообщения #{msg_id}</b>
+
+👤 <b>Пользователь:</b> {user_name} ({username_display})
+🆔 <b>ID пользователя:</b> {user_id}
+📋 <b>Тип:</b> {msg_type}
+📝 <b>Текст:</b> {text if text else 'Нет текста'}
+⏰ <b>Время:</b> {timestamp[:16]}
+📊 <b>Статус:</b> {status}"""
+
+            if admin_reply:
+                detail_text += f"\n💬 <b>Ответ админа:</b> {admin_reply}"
+
+            # Отправляем детали
+            bot.send_message(call.message.chat.id, detail_text, parse_mode='HTML')
+
+            # Если есть файл - отправляем его превью
+            if file_id and msg_type in ['photo', 'video', 'document', 'voice']:
+                try:
+                    if msg_type == 'photo':
+                        bot.send_photo(call.message.chat.id, file_id, caption=f"📷 Фото из сообщения #{msg_id}")
+                    elif msg_type == 'video':
+                        bot.send_video(call.message.chat.id, file_id, caption=f"🎥 Видео из сообщения #{msg_id}")
+                    elif msg_type == 'document':
+                        bot.send_document(call.message.chat.id, file_id, caption=f"📄 Документ из сообщения #{msg_id}")
+                    elif msg_type == 'voice':
+                        bot.send_voice(call.message.chat.id, file_id, caption=f"🎤 Голосовое из сообщения #{msg_id}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка отправки файла: {e}")
+
+            # Добавляем кнопки действий
+            from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+            
+            keyboard = InlineKeyboardMarkup()
+            keyboard.row(
+                InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{msg_id}"),
+                InlineKeyboardButton("📝 Опубликовать", callback_data=f"publish_normal_{msg_id}")
+            )
+            keyboard.row(
+                InlineKeyboardButton("🔄 Переслать", callback_data=f"publish_forward_{msg_id}"),
+                InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{msg_id}")
+            )
+
+            bot.send_message(call.message.chat.id, "Выберите действие:", reply_markup=keyboard)
+            bot.answer_callback_query(call.id, "✅ Детали сообщения")
+
+        elif call.data.startswith('publish_normal_'):
             message_id = int(call.data.split('_')[2])
             message_data = get_message_from_db(message_id)
             
@@ -1136,7 +1497,8 @@ def handle_callback(call):
             success = send_to_channel({
                 'message_type': message_data[5],  # 6-я колонка - message_type
                 'text': message_data[4],         # 5-я колонка - message_text
-                'file_id': message_data[6]       # 7-я колонка - file_id
+                'file_id': message_data[6],      # 7-я колонка - file_id
+                'file_ids': [message_data[6]]    # передаем как список для совместимости
             }, 'normal')
 
             conn = sqlite3.connect('bot.db', check_same_thread=False)
@@ -1187,7 +1549,8 @@ def handle_callback(call):
             success = send_to_channel({
                 'message_type': message_data[5],  # 6-я колонка - message_type
                 'text': message_data[4],         # 5-я колонка - message_text
-                'file_id': message_data[6]       # 7-я колонка - file_id
+                'file_id': message_data[6],      # 7-я колонка - file_id
+                'file_ids': [message_data[6]]    # передаем как список для совместимости
             }, 'forward', call.from_user.id)
 
             conn = sqlite3.connect('bot.db', check_same_thread=False)
@@ -1311,7 +1674,3 @@ if __name__ == "__main__":
         # Удаляем webhook еще раз и перезапускаем
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
-
-
-
-
