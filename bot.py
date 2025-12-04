@@ -11,12 +11,20 @@ import time
 import sys
 
 # === ПАТИ ДЛЯ БАЗЫ ДАННЫХ ===
-# Используем volume для сохранения данных
+# Основной вариант: используем volume для сохранения данных
 DATA_DIR = '/app/data'
 DB_PATH = os.path.join(DATA_DIR, 'bot.db')
 
+# Альтернативный вариант: если volumes не работают, используем рабочую директорию
+if not os.path.exists(DATA_DIR):
+    DATA_DIR = '/app'
+    DB_PATH = os.path.join(DATA_DIR, 'bot.db')
+    print(f"⚠️ Volume не найден, используем рабочую директорию: {DATA_DIR}")
+
 # Создаем директорию для данных если не существует
 os.makedirs(DATA_DIR, exist_ok=True)
+
+print(f"📁 База данных будет сохранена в: {DB_PATH}")
 
 # === ЗАГРУЗКА КОНФИГУРАЦИИ ===
 def load_config():
@@ -346,8 +354,9 @@ def process_media_group(media_group_id):
     
     del media_groups[media_group_id]
 
+# === ИСПРАВЛЕННАЯ ФУНКЦИЯ ДЛЯ УВЕДОМЛЕНИЯ О ГРУППАХ МЕДИА ===
 def notify_admins_group(message_id, user, text, media_type, file_ids):
-    """Уведомляет админов о группе медиа"""
+    """Уведомляет админов о группе медиа (исправленная версия)"""
     icons = {'text': '📝', 'photo': '📷', 'video': '🎥', 'voice': '🎤', 'document': '📄', 'sticker': '🎭'}
     icon = icons.get(media_type, '📨')
     username_display = f"@{user.username}" if user.username else "нет юзернейма"
@@ -364,6 +373,7 @@ def notify_admins_group(message_id, user, text, media_type, file_ids):
     for admin_id in ADMIN_IDS:
         try:
             if len(file_ids) > 1:
+                # Отправляем группу медиа
                 media = []
                 for i, file_id in enumerate(file_ids):
                     media.append(telebot.types.InputMediaPhoto(
@@ -371,21 +381,37 @@ def notify_admins_group(message_id, user, text, media_type, file_ids):
                         caption=admin_msg if i == 0 else None,
                         parse_mode='HTML'
                     ))
-                msg = bot.send_media_group(admin_id, media)[0]
+                # Отправляем медиагруппу
+                sent_messages = bot.send_media_group(admin_id, media)
+                
+                # Отправляем кнопки отдельным сообщением после медиагруппы
+                keyboard = InlineKeyboardMarkup()
+                keyboard.row(
+                    InlineKeyboardButton("📝 Обычная публикация", callback_data=f"publish_normal_{message_id}"),
+                    InlineKeyboardButton("🔄 Переслать", callback_data=f"publish_forward_{message_id}")
+                )
+                keyboard.row(
+                    InlineKeyboardButton("💬 Ответить пользователю", callback_data=f"reply_{message_id}"),
+                    InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{message_id}")
+                )
+                
+                bot.send_message(admin_id, "📋 Выберите действие для группы медиа:", reply_markup=keyboard)
+                
             else:
+                # Одно фото - отправляем как обычно
                 msg = bot.send_photo(admin_id, file_ids[0], caption=admin_msg, parse_mode='HTML')
-            
-            keyboard = InlineKeyboardMarkup()
-            keyboard.row(
-                InlineKeyboardButton("📝 Обычная публикация", callback_data=f"publish_normal_{message_id}"),
-                InlineKeyboardButton("🔄 Переслать", callback_data=f"publish_forward_{message_id}")
-            )
-            keyboard.row(
-                InlineKeyboardButton("💬 Ответить пользователю", callback_data=f"reply_{message_id}"),
-                InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{message_id}")
-            )
-            
-            bot.edit_message_reply_markup(admin_id, msg.message_id, reply_markup=keyboard)
+                
+                keyboard = InlineKeyboardMarkup()
+                keyboard.row(
+                    InlineKeyboardButton("📝 Обычная публикация", callback_data=f"publish_normal_{message_id}"),
+                    InlineKeyboardButton("🔄 Переслать", callback_data=f"publish_forward_{message_id}")
+                )
+                keyboard.row(
+                    InlineKeyboardButton("💬 Ответить пользователю", callback_data=f"reply_{message_id}"),
+                    InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{message_id}")
+                )
+                
+                bot.edit_message_reply_markup(admin_id, msg.message_id, reply_markup=keyboard)
             
         except Exception as e:
             logger.error(f"❌ Ошибка отправки админу {admin_id}: {e}")
@@ -513,6 +539,7 @@ def help_command(message):
 • Голосовые сообщения
 • Документы
 • Стикеры
+• Опросы (просто отправьте текст опроса)
 """
     bot.send_message(message.chat.id, help_text, parse_mode='HTML')
 
@@ -591,39 +618,6 @@ def pending_messages(message):
         logger.error(f"❌ Ошибка получения ожидающих сообщений: {e}")
         bot.send_message(message.chat.id, "❌ Ошибка при получении списка сообщений")
 
-# === ОБРАБОТКА СООБЩЕНИЯ "ОПРОС" ===
-@bot.message_handler(func=lambda message: message.text and message.text.lower() == 'опрос')
-def handle_poll_request(message):
-    """Обрабатывает сообщение 'опрос' и отправляет инструкцию"""
-    user = message.from_user
-    logger.info(f"📊 Запрос опроса от {user.first_name} (ID: {user.id})")
-    
-    poll_instructions = """
-📊 <b>Создание опроса</b>
-
-Чтобы создать опрос, отправьте сообщение в формате:
-
-<b>Опрос</b>
-<b>Вопрос опроса?</b>
-
-✅ Вариант 1
-✅ Вариант 2  
-✅ Вариант 3
-
-📝 <b>Пример:</b>
-Опрос
-Какой ваш любимый цвет?
-
-✅ Красный
-✅ Синий
-✅ Зеленый
-✅ Желтый
-
-Бот отправит это сообщение админам для публикации в канале как опрос.
-"""
-    
-    bot.send_message(message.chat.id, poll_instructions, parse_mode='HTML')
-
 # === ОБРАБОТЧИКИ СООБЩЕНИЙ ===
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
@@ -633,10 +627,6 @@ def handle_text(message):
     user = message.from_user
     
     if user.id in ADMIN_IDS and user.id in user_reply_mode:
-        return
-    
-    if message.text.lower() == 'опрос':
-        handle_poll_request(message)
         return
     
     logger.info(f"📝 Текст от {user.first_name} (ID: {user.id})")
