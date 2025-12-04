@@ -1047,8 +1047,9 @@ if __name__ == "__main__":
         log_bot_event('restart', f"Restart due to error: {e}")
         time.sleep(10)
         delete_webhook()
-        bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)    logger.error(f"❌ Ошибка доступа к боту: {e}")
-    logger.error("⚠️ Проверьте правильность BOT_TOKEN")
+            bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+except Exception as e:
+    logger.error(f"❌ Ошибка polling: {e}")
     exit(1)
 
 # Проверка канала
@@ -2044,4 +2045,5 @@ if __name__ == "__main__":
         time.sleep(10)
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
 
