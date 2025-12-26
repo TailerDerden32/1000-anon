@@ -498,8 +498,8 @@ def start(message):
     logger.info(f"👤 /start от {user.first_name} (ID: {user.id})")
     bot.send_message(message.chat.id, 
                     "👋 <b>Привет!</b>\n\n"
-                    "Отправь мне сообщение или медиафайл для публикации в канале.\n"
-                    "Всё будет отправлено на модерацию.", 
+                    "Отправь мне сообщение или любой файл(медиа) для публикации в канале.\n"
+                    "Почти все будет опубликовано (не заходя за рамки кнш)", 
                     parse_mode='HTML')
 
 @bot.message_handler(commands=['help'])
@@ -507,7 +507,7 @@ def help_command(message):
     help_text = """
 🤖 <b>Доступные команды:</b>
 /start - Начать работу
-/help - Показать справку
+/help - Показать информацию
 /stats - Статистика бота (админы)
 /pending - Сообщения на модерации (админы)
 
@@ -618,7 +618,7 @@ def handle_text(message):
         message.text
     )
 
-    bot.send_message(message.chat.id, "✅ Сообщение отправлено на модерацию")
+    bot.send_message(message.chat.id, "✅ Сообщение отправлено админам")
     notify_admins(message_id, user, message.text, 'text', None, message.message_id)
 
 @bot.message_handler(content_types=['photo'])
@@ -653,7 +653,7 @@ def handle_photo(message):
             'photo'
         )
 
-        bot.send_message(message.chat.id, "✅ Фото отправлено на модерацию")
+        bot.send_message(message.chat.id, "✅ Фото отправлено админам")
         notify_admins(message_id, user, caption, 'photo', file_id, message.message_id)
 
 @bot.message_handler(content_types=['video'])
@@ -672,7 +672,7 @@ def handle_video(message):
         'video'
     )
 
-    bot.send_message(message.chat.id, "✅ Видео отправлено на модерацию")
+    bot.send_message(message.chat.id, "✅ Видео отправлено админам")
     notify_admins(message_id, user, caption, 'video', file_id, message.message_id)
 
 @bot.message_handler(content_types=['voice'])
@@ -690,7 +690,7 @@ def handle_voice(message):
         'voice'
     )
 
-    bot.send_message(message.chat.id, "✅ Голосовое сообщение отправлено на модерацию")
+    bot.send_message(message.chat.id, "✅ Голосовое сообщение отправлено админам")
     notify_admins(message_id, user, '🎤 Голосовое сообщение', 'voice', file_id, message.message_id)
 
 @bot.message_handler(content_types=['document'])
@@ -709,7 +709,7 @@ def handle_document(message):
         'document'
     )
 
-    bot.send_message(message.chat.id, "✅ Документ отправлен на модерацию")
+    bot.send_message(message.chat.id, "✅ Документ отправлен админам")
     notify_admins(message_id, user, caption, 'document', file_id, message.message_id)
 
 @bot.message_handler(content_types=['sticker'])
@@ -728,7 +728,7 @@ def handle_sticker(message):
         'sticker'
     )
 
-    bot.send_message(message.chat.id, "✅ Стикер отправлен на модерацию")
+    bot.send_message(message.chat.id, "✅ Стикер отправлен админам")
     notify_admins(message_id, user, f"{sticker_emoji} Стикер", 'sticker', message.sticker.file_id, message.message_id)
 
 # === УВЕДОМЛЕНИЯ АДМИНАМ ===
@@ -765,7 +765,7 @@ def notify_admins(message_id, user, text, media_type, file_id=None, original_mes
             
             keyboard = InlineKeyboardMarkup()
             keyboard.row(
-                InlineKeyboardButton("📝 Опубликовать", callback_data=f"publish_normal_{message_id}"),
+                InlineKeyboardButton("📝 Опуб. не тыкать", callback_data=f"publish_normal_{message_id}"),
                 InlineKeyboardButton("🔄 Переслать", callback_data=f"publish_forward_{message_id}")
             )
             keyboard.row(
@@ -846,7 +846,7 @@ def handle_callback(call):
             keyboard = InlineKeyboardMarkup()
             keyboard.row(
                 InlineKeyboardButton("💬 Ответить", callback_data=f"reply_{msg_id}"),
-                InlineKeyboardButton("📝 Опубликовать", callback_data=f"publish_normal_{msg_id}")
+                InlineKeyboardButton("📝 Опуб. не тыкать", callback_data=f"publish_normal_{msg_id}")
             )
             keyboard.row(
                 InlineKeyboardButton("🔄 Переслать", callback_data=f"publish_forward_{msg_id}"),
@@ -1048,3 +1048,4 @@ if __name__ == "__main__":
         time.sleep(10)
         delete_webhook()
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+
